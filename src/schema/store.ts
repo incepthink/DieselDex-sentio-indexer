@@ -237,6 +237,48 @@ export class Pool extends AbstractEntity  {
 }
 
 
+interface LPPositionConstructorInput {
+  id: ID;
+  pool_address?: String;
+  user_address?: String;
+  token_index?: BigInt;
+  token_address?: String;
+  token_symbol?: String;
+  token_amount?: Float;
+  token_amount_usd?: Float;
+}
+@Entity("LPPosition")
+export class LPPosition extends AbstractEntity  {
+
+	@Required
+	@Column("ID")
+	id: ID
+
+	@Column("String")
+	pool_address?: String
+
+	@Column("String")
+	user_address?: String
+
+	@Column("BigInt")
+	token_index?: BigInt
+
+	@Column("String")
+	token_address?: String
+
+	@Column("String")
+	token_symbol?: String
+
+	@Column("Float")
+	token_amount?: Float
+
+	@Column("Float")
+	token_amount_usd?: Float
+  constructor(data: LPPositionConstructorInput) {super()}
+  
+}
+
+
 interface LPPositionSnapshotConstructorInput {
   id: ID;
   timestamp?: BigInt;
@@ -819,6 +861,17 @@ type Pool @entity {
   tvl_usd: Float
 }
 
+type LPPosition @entity {
+  id: ID!
+  pool_address: String
+  user_address: String
+  token_index: BigInt
+  token_address: String
+  token_symbol: String
+  token_amount: Float
+  token_amount_usd: Float
+}
+
 type LPPositionSnapshot @entity {
   id: ID!
   timestamp: BigInt
@@ -962,6 +1015,7 @@ DatabaseSchema.register({
 		"Balance": Balance,
 		"MainPrice": MainPrice,
 		"Pool": Pool,
+		"LPPosition": LPPosition,
 		"LPPositionSnapshot": LPPositionSnapshot,
 		"PoolSnapshot": PoolSnapshot,
 		"Trades": Trades,

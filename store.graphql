@@ -52,6 +52,17 @@ type Pool @entity {
   tvl_usd: Float
 }
 
+type LPPosition @entity {
+  id: ID!
+  pool_address: String
+  user_address: String
+  token_index: BigInt
+  token_address: String
+  token_symbol: String
+  token_amount: Float
+  token_amount_usd: Float
+}
+
 type LPPositionSnapshot @entity {
   id: ID!
   timestamp: BigInt

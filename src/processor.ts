@@ -5,11 +5,12 @@ import { DieselAmmContractProcessor } from "./types/fuel/DieselAmmContractProces
 import {
   BurnEventOutput,
   CreatePoolEventInput,
+  CreatePoolEventOutput,
   DieselAmmContract,
   MintEventOutput,
   SwapEventOutput,
 } from "./types/fuel/DieselAmmContract.js";
-import { Balance, Pool, PoolSnapshot } from "./schema/store.js";
+import { Balance, LPPosition, Pool, PoolSnapshot } from "./schema/store.js";
 import {
   calculateFee,
   getHash,
@@ -31,10 +32,11 @@ let ETH_ID =
 DieselAmmContractProcessor.bind({
   address: "0x7c293b054938bedca41354203be4c08aec2c3466412cac803f4ad62abf22e476",
   chainId: FuelNetwork.MAIN_NET,
+  startBlock: 11799443n,
 })
   .onLogCreatePoolEvent(
     async (
-      log: FuelLog<CreatePoolEventInput>,
+      log: FuelLog<CreatePoolEventOutput>,
       ctx: FuelContractContext<DieselAmmContract>
     ) => {
       // const pool = new Pool({
@@ -85,48 +87,68 @@ DieselAmmContractProcessor.bind({
       log: FuelLog<MintEventOutput>,
       ctx: FuelContractContext<DieselAmmContract>
     ) => {
-      const asset_0_in = log.data.asset_0_in;
-      const asset_1_in = log.data.asset_1_in;
-      const asset0Id = log.data.pool_id[0].bits;
-      const asset1Id = log.data.pool_id[1].bits;
-      const eth_usd = (await getPriceBySymbol("ETH", new Date())) || 3196;
-      const usdc_usd = (await getPriceBySymbol("USDC", new Date())) || 1;
-      const poolId = poolIdToStr(log.data.pool_id);
+      try {
+        const asset_0_in = log.data.asset_0_in;
+        const asset_1_in = log.data.asset_1_in;
+        const asset0Id = log.data.pool_id[0].bits;
+        const asset1Id = log.data.pool_id[1].bits;
+        const eth_usd = (await getPriceBySymbol("ETH", new Date())) || 3196;
+        const usdc_usd = (await getPriceBySymbol("USDC", new Date())) || 1;
+        const poolId = poolIdToStr(log.data.pool_id);
 
-      // get pool by id
-      const pool = await ctx.store.get(Pool, poolId);
+        // get pool by id
+        const pool = await ctx.store.get(Pool, poolId);
 
-      if (!pool) {
-        throw new Error("Pool not found");
+        if (!pool) {
+          throw new Error("Pool not found");
+        }
+
+        pool.reserve_0 = pool.reserve_0! + BigInt(asset_0_in.toString());
+        pool.reserve_1 = pool.reserve_1! + BigInt(asset_1_in.toString());
+        pool.lp_token_address = log.data.liquidity.id.bits;
+        pool.lp_token_symbol = `${tokenConfig[pool.asset_0!].symbol}-${
+          tokenConfig[pool.asset_1!].symbol
+        } LP`;
+
+        // pool.tvl_usd = getPoolTvl(pool, eth_usd, usdc_usd);
+        // const [address, isContract] = identityToStr(log.data.recipient);
+
+        // const balanceId = getHash(`${address}-${ctx.contractAddress}`);
+        // console.log(address);
+        // let balance = await ctx.store.get(Balance, balanceId);
+
+        // await updateBalanceByPool(
+        //   log.data.recipient.Address?.bits!,
+        //   poolId,
+        //   asset0Id,
+        //   asset1Id,
+        //   asset0In,
+        //   asset1In,
+        //   balance,
+        //   balanceId,
+        //   ctx
+        // );
+
+        const [address, isContract] = identityToStr(log.data.recipient);
+        const positionId = getHash(`${address}-${poolIdToStr(pool.id)}`);
+
+        let position = await ctx.store.get(PoolSnapshot, positionId);
+
+        if (!position) {
+          const newPosition = new LPPosition({
+            id: poolId,
+            pool_address: poolIdToStr(pool.id),
+            user_address: address,
+            token_address: "to be defined",
+            token_symbol: "ETH",
+            token_amount: 0,
+          });
+        }
+
+        await ctx.store.upsert(pool);
+      } catch (error) {
+        console.log("MINT ERROR", error);
       }
-
-      pool.reserve_0 = pool.reserve_0! + BigInt(asset_0_in.toString());
-      pool.reserve_1 = pool.reserve_1! + BigInt(asset_1_in.toString());
-      pool.lp_token_address = log.data.liquidity.id.bits;
-      pool.lp_token_symbol = `${tokenConfig[pool.asset_0!].symbol}-${
-        tokenConfig[pool.asset_1!].symbol
-      } LP`;
-
-      // pool.tvl_usd = getPoolTvl(pool, eth_usd, usdc_usd);
-      // const [address, isContract] = identityToStr(log.data.recipient);
-
-      // const balanceId = getHash(`${address}-${ctx.contractAddress}`);
-      // console.log(address);
-      // let balance = await ctx.store.get(Balance, balanceId);
-
-      // await updateBalanceByPool(
-      //   log.data.recipient.Address?.bits!,
-      //   poolId,
-      //   asset0Id,
-      //   asset1Id,
-      //   asset0In,
-      //   asset1In,
-      //   balance,
-      //   balanceId,
-      //   ctx
-      // );
-
-      await ctx.store.upsert(pool);
     }
   )
   .onLogBurnEvent(
@@ -134,45 +156,49 @@ DieselAmmContractProcessor.bind({
       log: FuelLog<BurnEventOutput>,
       ctx: FuelContractContext<DieselAmmContract>
     ) => {
-      const asset_0_out = log.data.asset_0_out.toString();
-      const asset_1_out = log.data.asset_1_out.toString();
-      const asset0Id = log.data.pool_id[0].bits;
-      const asset1Id = log.data.pool_id[1].bits;
-      const poolId = poolIdToStr(log.data.pool_id);
+      try {
+        const asset_0_out = log.data.asset_0_out.toString();
+        const asset_1_out = log.data.asset_1_out.toString();
+        const asset0Id = log.data.pool_id[0].bits;
+        const asset1Id = log.data.pool_id[1].bits;
+        const poolId = poolIdToStr(log.data.pool_id);
 
-      const eth_usd = (await getPriceBySymbol("ETH", new Date())) || 3196;
-      const usdc_usd = (await getPriceBySymbol("USDC", new Date())) || 1;
+        const eth_usd = (await getPriceBySymbol("ETH", new Date())) || 3196;
+        const usdc_usd = (await getPriceBySymbol("USDC", new Date())) || 1;
 
-      const pool = await ctx.store.get(Pool, poolId);
+        const pool = await ctx.store.get(Pool, poolId);
 
-      if (!pool) {
-        throw new Error(`Pool with ID ${poolId} not found`);
+        if (!pool) {
+          throw new Error(`Pool with ID ${poolId} not found`);
+        }
+
+        pool.reserve_0 = pool.reserve_0! - BigInt(asset_0_out.toString());
+        pool.reserve_1 = pool.reserve_1! - BigInt(asset_1_out.toString());
+        pool.lp_token_address = log.data.liquidity.id.bits;
+        pool.lp_token_symbol = `${tokenConfig[pool.asset_0!].symbol}-${
+          tokenConfig[pool.asset_1!].symbol
+        } LP`;
+
+        // pool.tvl_usd = getPoolTvl(pool, eth_usd, usdc_usd);
+
+        // if (
+        //   pool.reserve_0 < BigInt(asset0out) ||
+        //   pool.reserve_1 < BigInt(asset1out)
+        // ) {
+        //   throw new Error(
+        //     `reserve0: ${pool.reserve_0} reserve1: ${pool.reserve_1} Insufficient reserves in pool ${poolId}`
+        //   );
+        // }
+
+        // pool.reserve_0 = pool.reserve_0 - BigInt(asset0out);
+        // pool.reserve_1 = pool.reserve_1 - BigInt(asset1out);
+        // pool.create_time = pool.create_time ?? ctx.timestamp;
+        // pool.lpId = log.data.liquidity.id.bits;
+
+        await ctx.store.upsert(pool);
+      } catch (error) {
+        console.log("BURN EVENT Error", error);
       }
-
-      pool.reserve_0 = pool.reserve_0! - BigInt(asset_0_out.toString());
-      pool.reserve_1 = pool.reserve_1! - BigInt(asset_1_out.toString());
-      pool.lp_token_address = log.data.liquidity.id.bits;
-      pool.lp_token_symbol = `${tokenConfig[pool.asset_0!].symbol}-${
-        tokenConfig[pool.asset_1!].symbol
-      } LP`;
-
-      // pool.tvl_usd = getPoolTvl(pool, eth_usd, usdc_usd);
-
-      // if (
-      //   pool.reserve_0 < BigInt(asset0out) ||
-      //   pool.reserve_1 < BigInt(asset1out)
-      // ) {
-      //   throw new Error(
-      //     `reserve0: ${pool.reserve_0} reserve1: ${pool.reserve_1} Insufficient reserves in pool ${poolId}`
-      //   );
-      // }
-
-      // pool.reserve_0 = pool.reserve_0 - BigInt(asset0out);
-      // pool.reserve_1 = pool.reserve_1 - BigInt(asset1out);
-      // pool.create_time = pool.create_time ?? ctx.timestamp;
-      // pool.lpId = log.data.liquidity.id.bits;
-
-      await ctx.store.upsert(pool);
     }
   )
   .onLogSwapEvent(
@@ -180,89 +206,134 @@ DieselAmmContractProcessor.bind({
       log: FuelLog<SwapEventOutput>,
       ctx: FuelContractContext<DieselAmmContract>
     ) => {
-      const asset_0_in = log.data.asset_0_in.toString();
-      const asset_1_in = log.data.asset_1_in.toString();
-      const asset_0_out = log.data.asset_0_out.toString();
-      const asset_1_out = log.data.asset_1_out.toString();
-      const asset0Id = log.data.pool_id[0].bits;
-      const asset1Id = log.data.pool_id[1].bits;
-      const eth_usd = (await getPriceBySymbol("ETH", new Date())) || 3196;
-      const usdc_usd = (await getPriceBySymbol("USDC", new Date())) || 1;
-      let vol = 0;
-      let fees = 0;
+      try {
+        const asset_0_in = log.data.asset_0_in.toString();
+        const asset_1_in = log.data.asset_1_in.toString();
+        const asset_0_out = log.data.asset_0_out.toString();
+        const asset_1_out = log.data.asset_1_out.toString();
+        const asset0Id = log.data.pool_id[0].bits;
+        const asset1Id = log.data.pool_id[1].bits;
+        const eth_usd = (await getPriceBySymbol("ETH", new Date())) || 3196;
+        const usdc_usd = (await getPriceBySymbol("USDC", new Date())) || 1;
+        let vol = 0;
+        let fees = 0;
 
-      const poolId = poolIdToStr(log.data.pool_id);
+        const poolId = poolIdToStr(log.data.pool_id);
 
-      const pool = await ctx.store.get(Pool, poolId);
+        const pool = await ctx.store.get(Pool, poolId);
 
-      if (!pool) {
-        throw new Error(`Pool with ID ${poolId} not found`);
+        if (!pool) {
+          throw new Error(`Pool with ID ${poolId} not found`);
+        }
+
+        if (Number(asset_0_in) > 0) {
+          vol = Number(
+            log.data.asset_0_in.add(log.data.asset_1_out).toString()
+          );
+          fees =
+            Number(calculateFee(pool?.is_stable!, BigInt(asset_0_in))) /
+            10 ** pool.decimals_0!;
+
+          if (asset0Id === ETH_ID) {
+            fees = fees * eth_usd;
+          } else if (asset0Id === USDC_ID) fees = fees * usdc_usd;
+        } else if (Number(asset_1_in) > 0) {
+          vol = Number(
+            log.data.asset_1_in.add(log.data.asset_0_out).toString()
+          );
+          fees =
+            Number(calculateFee(pool?.is_stable!, BigInt(asset_1_in))) /
+            10 ** pool.decimals_1!;
+
+          if (asset1Id === ETH_ID) {
+            fees = fees * eth_usd;
+          } else if (asset1Id === USDC_ID) fees = fees * usdc_usd;
+        }
+
+        pool.reserve_0 =
+          pool.reserve_0! + BigInt(asset_0_in) - BigInt(asset_0_out);
+        pool.reserve_1 =
+          pool.reserve_1! + BigInt(asset_1_in) - BigInt(asset_1_out);
+
+        pool.volume_amount = pool.volume_amount + vol;
+        pool.total_fees_usd = pool.total_fees_usd! + fees;
+
+        // pool.tvl_usd = getPoolTvl(pool, eth_usd, usdc_usd);
+
+        // Check if new reserves are negative
+        // if (newReserve0 < 0n || newReserve1 < 0n) {
+        //   throw new Error(
+        //     `reserve0: ${pool.reserve_0} reserve1: ${pool.reserve_1} Insufficient reserves in pool ${poolId}`
+        //   );
+        // }
+        // pool.create_time = pool.create_time ?? ctx.timestamp;
+
+        await ctx.store.upsert(pool);
+      } catch (error) {
+        console.log("SWAP EVENT ERROR", error);
       }
-
-      if (Number(asset_0_in) > 0) {
-        vol = Number(log.data.asset_0_in.add(log.data.asset_1_out).toString());
-        fees =
-          Number(calculateFee(pool?.is_stable!, BigInt(asset_0_in))) /
-          10 ** pool.decimals_0!;
-
-        if (asset0Id === ETH_ID) {
-          fees = fees * eth_usd;
-        } else if (asset0Id === USDC_ID) fees = fees * usdc_usd;
-      } else if (Number(asset_1_in) > 0) {
-        vol = Number(log.data.asset_1_in.add(log.data.asset_0_out).toString());
-        fees =
-          Number(calculateFee(pool?.is_stable!, BigInt(asset_1_in))) /
-          10 ** pool.decimals_1!;
-
-        if (asset1Id === ETH_ID) {
-          fees = fees * eth_usd;
-        } else if (asset1Id === USDC_ID) fees = fees * usdc_usd;
-      }
-
-      pool.reserve_0 =
-        pool.reserve_0! + BigInt(asset_0_in) - BigInt(asset_0_out);
-      pool.reserve_1 =
-        pool.reserve_1! + BigInt(asset_1_in) - BigInt(asset_1_out);
-
-      pool.volume_amount = pool.volume_amount + vol;
-      pool.total_fees_usd = pool.total_fees_usd! + fees;
-
-      // pool.tvl_usd = getPoolTvl(pool, eth_usd, usdc_usd);
-
-      // Check if new reserves are negative
-      // if (newReserve0 < 0n || newReserve1 < 0n) {
-      //   throw new Error(
-      //     `reserve0: ${pool.reserve_0} reserve1: ${pool.reserve_1} Insufficient reserves in pool ${poolId}`
-      //   );
-      // }
-      // pool.create_time = pool.create_time ?? ctx.timestamp;
-
-      await ctx.store.upsert(pool);
     }
   )
   .onTimeInterval(
-    async (block: any, ctx: any) => {
-      console.log("FROM TIMEREDFFDUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUU");
-      const pools = await ctx.store.list(Pool);
-      pools.forEach((pool: Pool, i: any) => {
-        const poolSnap = new PoolSnapshot({
-          id: pool.id,
-          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          block_date: new Date(ctx.timestamp)
-            .toISOString()
-            .slice(0, 19)
-            .replace("T", " "),
-          chain_id: Number(ctx.chainId),
-          pool_address: poolIdToStr(pool.id),
-          token_index: 0n,
-          token_address: "to be defined",
-          token_symbol: "ETH",
-          token_amount: 0,
-          token_amount_usd: 0,
-          volume_amount: pool.volume_amount,
-          fee_rate: pool.fee_rate,
-        });
-      });
+    async (block: any, ctx: FuelContractContext<DieselAmmContract>) => {
+      try {
+        console.log("FROM TIMEREDFFDUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUU");
+        const pools = await ctx.store.list(Pool, []);
+        console.log("POOLS", pools);
+
+        // pools.forEach(async (pool: Pool, i: any) => {
+        //   const poolSnap = await ctx.store.get(PoolSnapshot, pool.id);
+        //   if (!poolSnap) {
+        //     const poolSnap = new PoolSnapshot({
+        //       id: pool.id,
+        //       timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
+        //       block_date: new Date(ctx.timestamp)
+        //         .toISOString()
+        //         .slice(0, 19)
+        //         .replace("T", " "),
+        //       chain_id: Number(ctx.chainId),
+        //       pool_address: poolIdToStr(pool.id),
+        //       token_index: 0n,
+        //       token_address: "to be defined",
+        //       token_symbol: "ETH",
+        //       token_amount: 0,
+        //       token_amount_usd: 0,
+        //       volume_amount: pool.volume_amount,
+        //       fee_rate: pool.fee_rate,
+        //       total_fees_usd: pool.total_fees_usd,
+        //       user_fees_usd: pool.total_fees_usd,
+        //       protocol_fees_usd: 0,
+        //     });
+
+        //     await ctx.store.upsert(poolSnap);
+        //     return;
+        //   }
+        //   poolSnap.id = pool.id;
+        //   poolSnap.timestamp = Math.floor(
+        //     new Date(ctx.timestamp).getTime() / 1000
+        //   );
+        //   poolSnap.block_date = new Date(ctx.timestamp)
+        //     .toISOString()
+        //     .slice(0, 19)
+        //     .replace("T", " ");
+        //   poolSnap.chain_id = Number(ctx.chainId);
+        //   poolSnap.pool_address = poolIdToStr(pool.id);
+        //   poolSnap.token_index = 0n;
+        //   poolSnap.token_address = "to be defined";
+        //   poolSnap.token_symbol = "ETH";
+        //   poolSnap.token_amount = 0;
+        //   poolSnap.token_amount_usd = 0;
+        //   poolSnap.volume_amount = pool.volume_amount;
+        //   poolSnap.fee_rate = pool.fee_rate;
+        //   poolSnap.total_fees_usd = pool.total_fees_usd;
+        //   poolSnap.user_fees_usd = pool.total_fees_usd;
+        //   poolSnap.protocol_fees_usd = 0;
+
+        //   await ctx.store.upsert(poolSnap);
+        // });
+      } catch (error) {
+        console.log("TIME INTERVAL ERROR", error);
+      }
     },
     60,
     60
