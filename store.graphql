@@ -1,0 +1,189 @@
+type UserScoreSnapshot @entity {
+  id: ID!
+  timestamp: Timestamp
+  block_date: String
+  chain_id: Int
+  block_number: Int
+  user_address: String
+  pool_address: String
+  total_value_locked_score: Float!
+  market_depth_score: Int
+}
+
+type Balance @entity {
+  id: ID!
+  user: String!
+  pool_address: String!
+  tvl: Float!
+}
+
+type MainPrice @entity {
+  id: ID!
+  eth_usd: Float!
+  usdc_usd: Float!
+  fuel_usd: Float!
+}
+
+type Pool @entity {
+  id: ID!
+  chain_id: Int!
+  creation_block_number: BigInt!
+  timestamp: BigInt!
+  pool_address: String!
+  lp_token_address: String!
+  lp_token_symbol: String!
+  token_address: String!
+  token_symbol: String!
+  token_decimals: String!
+  token_index: String!
+  fee_rate: Float
+  dex_type: String!
+  token_amount: Float!
+  volume_amount: Float!
+  total_fees_usd: Float
+
+  asset_0: String
+  asset_1: String
+  is_stable: Boolean
+  reserve_0: BigInt
+  reserve_1: BigInt
+  decimals_0: Int
+  decimals_1: Int
+  tvl_usd: Float
+}
+
+type LPPositionSnapshot @entity {
+  id: ID!
+  timestamp: BigInt
+  block_date: Timestamp
+  chain_id: Int
+  pool_address: String
+  user_address: String
+  token_index: BigInt
+  token_address: String
+  token_symbol: String
+  token_amount: Float
+  token_amount_usd: Float
+}
+
+type PoolSnapshot @entity {
+  id: ID!
+  timestamp: Int
+  block_date: String
+  chain_id: Int
+  pool_address: String
+  token_index: BigInt
+  token_address: String
+  token_symbol: String
+  token_amount: Float
+  token_amount_usd: Float
+  volume_amount: Float
+  volume_usd: Float
+  fee_rate: Float
+  total_fees_usd: Float
+  user_fees_usd: Float
+  protocol_fees_usd: Float
+}
+
+type Trades @entity {
+  id: ID!
+  timestamp: Timestamp
+  chain_id: Int
+  block_number: BigInt
+  log_index: BigInt
+  transaction_hash: String
+  user_address: String
+  taker_address: String
+  maker_address: String
+  pair_name: String
+  pool_address: String
+  input_token_address: String
+  input_token_symbol: String
+  input_token_amount: Float
+  output_token_address: String
+  output_token_symbol: String
+  output_token_amount: Float
+  spot_price_after_swap: Float
+  swap_amount_usd: Float
+  fees_usd: Float
+}
+
+type V2Mints @entity {
+  id: ID!
+  timestamp: Timestamp
+  chain_id: Int
+  block_number: BigInt
+  log_index: BigInt
+  transaction_hash: String
+  transaction_from_address: String
+  from_address: String
+  to_address: String
+  pool_address: String
+  token0_address: String
+  token0_amount: Float
+  token1_address: String
+  token1_amount: Float
+  mint_amount: Float
+  mint_amount_usd: Float
+}
+
+type V2Burns @entity {
+  id: ID!
+  timestamp: Timestamp
+  chain_id: Int
+  block_number: BigInt
+  log_index: BigInt
+  transaction_hash: String
+  transaction_from_address: String
+  from_address: String
+  to_address: String
+  pool_address: String
+  token0_address: String
+  token0_amount: Float
+  token1_address: String
+  token1_amount: Float
+  burn_amount: Float
+  burn_amount_usd: Float
+}
+
+type V2Syncs @entity {
+  id: ID!
+  timestamp: Timestamp
+  chain_id: Int
+  block_number: BigInt
+  log_index: BigInt
+  transaction_hash: String
+  pool_address: String
+  token0_address: String
+  token0_amount: Float
+  token1_address: String
+  token1_amount: Float
+}
+
+type V2Transfers @entity {
+  id: ID!
+  timestamp: Timestamp
+  chain_id: Int
+  block_number: BigInt
+  log_index: BigInt
+  transaction_hash: String
+  transaction_from_address: String
+  from_address: String
+  to_address: String
+  pool_address: String
+  token_amount: Float
+}
+
+type IncentiveClaimData @entity {
+  id: ID!
+  timestamp: Timestamp
+  chain_id: Int
+  transaction_hash: String
+  log_index: BigInt
+  transaction_signer: String
+  user_address: String
+  claimed_token_address: String
+  amount: Float
+  amount_usd: Float
+  other_incentive_usd: Float
+}
