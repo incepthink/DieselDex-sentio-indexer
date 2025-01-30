@@ -15,7 +15,7 @@ import { DatabaseSchema } from '@sentio/sdk'
 
 interface UserScoreSnapshotConstructorInput {
   id: ID;
-  timestamp?: Timestamp;
+  timestamp?: Int;
   block_date?: String;
   chain_id?: Int;
   block_number?: Int;
@@ -31,8 +31,8 @@ export class UserScoreSnapshot extends AbstractEntity  {
 	@Column("ID")
 	id: ID
 
-	@Column("Timestamp")
-	timestamp?: Timestamp
+	@Column("Int")
+	timestamp?: Int
 
 	@Column("String")
 	block_date?: String
@@ -121,25 +121,27 @@ export class MainPrice extends AbstractEntity  {
 interface PoolConstructorInput {
   id: ID;
   chain_id: Int;
-  creation_block_number: BigInt;
-  timestamp: BigInt;
+  creation_block_number: Int;
+  timestamp: Int;
   pool_address: String;
   lp_token_address: String;
   lp_token_symbol: String;
   token_address: String;
   token_symbol: String;
   token_decimals: String;
-  token_index: String;
+  token_index: BigInt;
   fee_rate?: Float;
   dex_type: String;
   token_amount: Float;
   volume_amount: Float;
   total_fees_usd?: Float;
+  volume_usd?: Float;
+  token_amount_usd?: Float;
   asset_0?: String;
   asset_1?: String;
   is_stable?: Boolean;
-  reserve_0?: BigInt;
-  reserve_1?: BigInt;
+  reserve_0: BigInt;
+  reserve_1: BigInt;
   decimals_0?: Int;
   decimals_1?: Int;
   tvl_usd?: Float;
@@ -156,12 +158,12 @@ export class Pool extends AbstractEntity  {
 	chain_id: Int
 
 	@Required
-	@Column("BigInt")
-	creation_block_number: BigInt
+	@Column("Int")
+	creation_block_number: Int
 
 	@Required
-	@Column("BigInt")
-	timestamp: BigInt
+	@Column("Int")
+	timestamp: Int
 
 	@Required
 	@Column("String")
@@ -188,8 +190,8 @@ export class Pool extends AbstractEntity  {
 	token_decimals: String
 
 	@Required
-	@Column("String")
-	token_index: String
+	@Column("BigInt")
+	token_index: BigInt
 
 	@Column("Float")
 	fee_rate?: Float
@@ -209,6 +211,12 @@ export class Pool extends AbstractEntity  {
 	@Column("Float")
 	total_fees_usd?: Float
 
+	@Column("Float")
+	volume_usd?: Float
+
+	@Column("Float")
+	token_amount_usd?: Float
+
 	@Column("String")
 	asset_0?: String
 
@@ -218,11 +226,13 @@ export class Pool extends AbstractEntity  {
 	@Column("Boolean")
 	is_stable?: Boolean
 
+	@Required
 	@Column("BigInt")
-	reserve_0?: BigInt
+	reserve_0: BigInt
 
+	@Required
 	@Column("BigInt")
-	reserve_1?: BigInt
+	reserve_1: BigInt
 
 	@Column("Int")
 	decimals_0?: Int
@@ -281,8 +291,8 @@ export class LPPosition extends AbstractEntity  {
 
 interface LPPositionSnapshotConstructorInput {
   id: ID;
-  timestamp?: BigInt;
-  block_date?: Timestamp;
+  timestamp?: Int;
+  block_date?: String;
   chain_id?: Int;
   pool_address?: String;
   user_address?: String;
@@ -299,11 +309,11 @@ export class LPPositionSnapshot extends AbstractEntity  {
 	@Column("ID")
 	id: ID
 
-	@Column("BigInt")
-	timestamp?: BigInt
+	@Column("Int")
+	timestamp?: Int
 
-	@Column("Timestamp")
-	block_date?: Timestamp
+	@Column("String")
+	block_date?: String
 
 	@Column("Int")
 	chain_id?: Int
@@ -499,10 +509,10 @@ export class Trades extends AbstractEntity  {
 
 interface V2MintsConstructorInput {
   id: ID;
-  timestamp?: Timestamp;
+  timestamp?: Int;
   chain_id?: Int;
-  block_number?: BigInt;
-  log_index?: BigInt;
+  block_number?: Int;
+  log_index?: Int;
   transaction_hash?: String;
   transaction_from_address?: String;
   from_address?: String;
@@ -522,17 +532,17 @@ export class V2Mints extends AbstractEntity  {
 	@Column("ID")
 	id: ID
 
-	@Column("Timestamp")
-	timestamp?: Timestamp
+	@Column("Int")
+	timestamp?: Int
 
 	@Column("Int")
 	chain_id?: Int
 
-	@Column("BigInt")
-	block_number?: BigInt
+	@Column("Int")
+	block_number?: Int
 
-	@Column("BigInt")
-	log_index?: BigInt
+	@Column("Int")
+	log_index?: Int
 
 	@Column("String")
 	transaction_hash?: String
@@ -573,10 +583,10 @@ export class V2Mints extends AbstractEntity  {
 
 interface V2BurnsConstructorInput {
   id: ID;
-  timestamp?: Timestamp;
+  timestamp?: Int;
   chain_id?: Int;
-  block_number?: BigInt;
-  log_index?: BigInt;
+  block_number?: Int;
+  log_index?: Int;
   transaction_hash?: String;
   transaction_from_address?: String;
   from_address?: String;
@@ -596,17 +606,17 @@ export class V2Burns extends AbstractEntity  {
 	@Column("ID")
 	id: ID
 
-	@Column("Timestamp")
-	timestamp?: Timestamp
+	@Column("Int")
+	timestamp?: Int
 
 	@Column("Int")
 	chain_id?: Int
 
-	@Column("BigInt")
-	block_number?: BigInt
+	@Column("Int")
+	block_number?: Int
 
-	@Column("BigInt")
-	log_index?: BigInt
+	@Column("Int")
+	log_index?: Int
 
 	@Column("String")
 	transaction_hash?: String
@@ -701,10 +711,10 @@ export class V2Syncs extends AbstractEntity  {
 
 interface V2TransfersConstructorInput {
   id: ID;
-  timestamp?: Timestamp;
+  timestamp?: Int;
   chain_id?: Int;
-  block_number?: BigInt;
-  log_index?: BigInt;
+  block_number?: Int;
+  log_index?: Int;
   transaction_hash?: String;
   transaction_from_address?: String;
   from_address?: String;
@@ -719,17 +729,17 @@ export class V2Transfers extends AbstractEntity  {
 	@Column("ID")
 	id: ID
 
-	@Column("Timestamp")
-	timestamp?: Timestamp
+	@Column("Int")
+	timestamp?: Int
 
 	@Column("Int")
 	chain_id?: Int
 
-	@Column("BigInt")
-	block_number?: BigInt
+	@Column("Int")
+	block_number?: Int
 
-	@Column("BigInt")
-	log_index?: BigInt
+	@Column("Int")
+	log_index?: Int
 
 	@Column("String")
 	transaction_hash?: String
@@ -809,7 +819,7 @@ export class IncentiveClaimData extends AbstractEntity  {
 
 const source = `type UserScoreSnapshot @entity {
   id: ID!
-  timestamp: Timestamp
+  timestamp: Int
   block_date: String
   chain_id: Int
   block_number: Int
@@ -836,26 +846,28 @@ type MainPrice @entity {
 type Pool @entity {
   id: ID!
   chain_id: Int!
-  creation_block_number: BigInt!
-  timestamp: BigInt!
+  creation_block_number: Int!
+  timestamp: Int!
   pool_address: String!
   lp_token_address: String!
   lp_token_symbol: String!
   token_address: String!
   token_symbol: String!
   token_decimals: String!
-  token_index: String!
+  token_index: BigInt!
   fee_rate: Float
   dex_type: String!
   token_amount: Float!
   volume_amount: Float!
   total_fees_usd: Float
+  volume_usd: Float
+  token_amount_usd: Float
 
   asset_0: String
   asset_1: String
   is_stable: Boolean
-  reserve_0: BigInt
-  reserve_1: BigInt
+  reserve_0: BigInt!
+  reserve_1: BigInt!
   decimals_0: Int
   decimals_1: Int
   tvl_usd: Float
@@ -874,8 +886,8 @@ type LPPosition @entity {
 
 type LPPositionSnapshot @entity {
   id: ID!
-  timestamp: BigInt
-  block_date: Timestamp
+  timestamp: Int
+  block_date: String
   chain_id: Int
   pool_address: String
   user_address: String
@@ -930,10 +942,10 @@ type Trades @entity {
 
 type V2Mints @entity {
   id: ID!
-  timestamp: Timestamp
+  timestamp: Int
   chain_id: Int
-  block_number: BigInt
-  log_index: BigInt
+  block_number: Int
+  log_index: Int
   transaction_hash: String
   transaction_from_address: String
   from_address: String
@@ -949,10 +961,10 @@ type V2Mints @entity {
 
 type V2Burns @entity {
   id: ID!
-  timestamp: Timestamp
+  timestamp: Int
   chain_id: Int
-  block_number: BigInt
-  log_index: BigInt
+  block_number: Int
+  log_index: Int
   transaction_hash: String
   transaction_from_address: String
   from_address: String
@@ -982,10 +994,10 @@ type V2Syncs @entity {
 
 type V2Transfers @entity {
   id: ID!
-  timestamp: Timestamp
+  timestamp: Int
   chain_id: Int
-  block_number: BigInt
-  log_index: BigInt
+  block_number: Int
+  log_index: Int
   transaction_hash: String
   transaction_from_address: String
   from_address: String

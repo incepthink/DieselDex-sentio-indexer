@@ -1,6 +1,6 @@
 type UserScoreSnapshot @entity {
   id: ID!
-  timestamp: Timestamp
+  timestamp: Int
   block_date: String
   chain_id: Int
   block_number: Int
@@ -27,26 +27,28 @@ type MainPrice @entity {
 type Pool @entity {
   id: ID!
   chain_id: Int!
-  creation_block_number: BigInt!
-  timestamp: BigInt!
+  creation_block_number: Int!
+  timestamp: Int!
   pool_address: String!
   lp_token_address: String!
   lp_token_symbol: String!
   token_address: String!
   token_symbol: String!
   token_decimals: String!
-  token_index: String!
+  token_index: BigInt!
   fee_rate: Float
   dex_type: String!
   token_amount: Float!
   volume_amount: Float!
   total_fees_usd: Float
+  volume_usd: Float
+  token_amount_usd: Float
 
   asset_0: String
   asset_1: String
   is_stable: Boolean
-  reserve_0: BigInt
-  reserve_1: BigInt
+  reserve_0: BigInt!
+  reserve_1: BigInt!
   decimals_0: Int
   decimals_1: Int
   tvl_usd: Float
@@ -65,8 +67,8 @@ type LPPosition @entity {
 
 type LPPositionSnapshot @entity {
   id: ID!
-  timestamp: BigInt
-  block_date: Timestamp
+  timestamp: Int
+  block_date: String
   chain_id: Int
   pool_address: String
   user_address: String
@@ -121,10 +123,10 @@ type Trades @entity {
 
 type V2Mints @entity {
   id: ID!
-  timestamp: Timestamp
+  timestamp: Int
   chain_id: Int
-  block_number: BigInt
-  log_index: BigInt
+  block_number: Int
+  log_index: Int
   transaction_hash: String
   transaction_from_address: String
   from_address: String
@@ -140,10 +142,10 @@ type V2Mints @entity {
 
 type V2Burns @entity {
   id: ID!
-  timestamp: Timestamp
+  timestamp: Int
   chain_id: Int
-  block_number: BigInt
-  log_index: BigInt
+  block_number: Int
+  log_index: Int
   transaction_hash: String
   transaction_from_address: String
   from_address: String
@@ -173,10 +175,10 @@ type V2Syncs @entity {
 
 type V2Transfers @entity {
   id: ID!
-  timestamp: Timestamp
+  timestamp: Int
   chain_id: Int
-  block_number: BigInt
-  log_index: BigInt
+  block_number: Int
+  log_index: Int
   transaction_hash: String
   transaction_from_address: String
   from_address: String

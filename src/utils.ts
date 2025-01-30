@@ -150,3 +150,15 @@ export const getPoolTvl = (pool: Pool, eth_usd: number, usdc_usd: number) => {
   }
   return 0;
 };
+
+export function formatTimestamp(date: Date) {
+  // YYYY-MM-DD format (daily snapshot)
+  const dailySnapshot = date.toISOString().split("T")[0];
+
+  // YYYY-MM-DD HH:00:00 format (hourly snapshot)
+  const hourlySnapshot = `${dailySnapshot} ${String(
+    date.getUTCHours()
+  ).padStart(2, "0")}:00:00`;
+
+  return { dailySnapshot, hourlySnapshot };
+}
