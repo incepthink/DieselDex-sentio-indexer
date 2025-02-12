@@ -34,8 +34,8 @@ type Pool @entity {
   lp_token_symbol: String!
   token_address: String!
   token_symbol: String!
-  token_decimals: String!
-  token_index: BigInt!
+  token_decimals: Float!
+  token_index: Float!
   fee_rate: Float
   dex_type: String!
   token_amount: Float!
@@ -52,17 +52,25 @@ type Pool @entity {
   decimals_0: Int
   decimals_1: Int
   tvl_usd: Float
+  tvl: BigInt
+  exchange_rate: BigInt
+
+  lp_amount: BigInt
 }
 
 type LPPosition @entity {
   id: ID!
   pool_address: String
   user_address: String
-  token_index: BigInt
+  token_index: Float
   token_address: String
   token_symbol: String
   token_amount: Float
   token_amount_usd: Float
+  tvl_usd: Float
+  ratio: Float
+  pool_token_amount: Float
+  liquidity_token_amount: Float
 }
 
 type LPPositionSnapshot @entity {
@@ -72,7 +80,7 @@ type LPPositionSnapshot @entity {
   chain_id: Int
   pool_address: String
   user_address: String
-  token_index: BigInt
+  token_index: Float
   token_address: String
   token_symbol: String
   token_amount: Float
@@ -85,7 +93,7 @@ type PoolSnapshot @entity {
   block_date: String
   chain_id: Int
   pool_address: String
-  token_index: BigInt
+  token_index: Float
   token_address: String
   token_symbol: String
   token_amount: Float
@@ -100,10 +108,10 @@ type PoolSnapshot @entity {
 
 type Trades @entity {
   id: ID!
-  timestamp: Timestamp
+  timestamp: Int
   chain_id: Int
-  block_number: BigInt
-  log_index: BigInt
+  block_number: Int
+  log_index: Int
   transaction_hash: String
   user_address: String
   taker_address: String
@@ -119,6 +127,7 @@ type Trades @entity {
   spot_price_after_swap: Float
   swap_amount_usd: Float
   fees_usd: Float
+  sqrt_price_x96: String
 }
 
 type V2Mints @entity {
@@ -199,4 +208,31 @@ type IncentiveClaimData @entity {
   amount: Float
   amount_usd: Float
   other_incentive_usd: Float
+}
+
+type LiquidityTransactionEvent @entity {
+  id: ID!
+  timestamp: Int
+  chain_id: Int
+  block_number: Int
+  log_index: Int
+  transaction_hash: String
+  user_address: String
+  taker_address: String
+  pool_address: String
+  token_address: String
+  token_index: Int
+  token_amount: Float
+  token_amount_usd: Float
+  event_type: String
+}
+
+type Diesel_TotalSupplyEvent @entity {
+  id: ID!
+  time: Int!
+  block_height: Int!
+  transaction_id: String!
+  asset: String!
+  supply: BigInt!
+  sender: String!
 }

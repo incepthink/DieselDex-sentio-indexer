@@ -128,8 +128,8 @@ interface PoolConstructorInput {
   lp_token_symbol: String;
   token_address: String;
   token_symbol: String;
-  token_decimals: String;
-  token_index: BigInt;
+  token_decimals: Float;
+  token_index: Float;
   fee_rate?: Float;
   dex_type: String;
   token_amount: Float;
@@ -145,6 +145,9 @@ interface PoolConstructorInput {
   decimals_0?: Int;
   decimals_1?: Int;
   tvl_usd?: Float;
+  tvl?: BigInt;
+  exchange_rate?: BigInt;
+  lp_amount?: BigInt;
 }
 @Entity("Pool")
 export class Pool extends AbstractEntity  {
@@ -186,12 +189,12 @@ export class Pool extends AbstractEntity  {
 	token_symbol: String
 
 	@Required
-	@Column("String")
-	token_decimals: String
+	@Column("Float")
+	token_decimals: Float
 
 	@Required
-	@Column("BigInt")
-	token_index: BigInt
+	@Column("Float")
+	token_index: Float
 
 	@Column("Float")
 	fee_rate?: Float
@@ -242,6 +245,15 @@ export class Pool extends AbstractEntity  {
 
 	@Column("Float")
 	tvl_usd?: Float
+
+	@Column("BigInt")
+	tvl?: BigInt
+
+	@Column("BigInt")
+	exchange_rate?: BigInt
+
+	@Column("BigInt")
+	lp_amount?: BigInt
   constructor(data: PoolConstructorInput) {super()}
   
 }
@@ -251,11 +263,15 @@ interface LPPositionConstructorInput {
   id: ID;
   pool_address?: String;
   user_address?: String;
-  token_index?: BigInt;
+  token_index?: Float;
   token_address?: String;
   token_symbol?: String;
   token_amount?: Float;
   token_amount_usd?: Float;
+  tvl_usd?: Float;
+  ratio?: Float;
+  pool_token_amount?: Float;
+  liquidity_token_amount?: Float;
 }
 @Entity("LPPosition")
 export class LPPosition extends AbstractEntity  {
@@ -270,8 +286,8 @@ export class LPPosition extends AbstractEntity  {
 	@Column("String")
 	user_address?: String
 
-	@Column("BigInt")
-	token_index?: BigInt
+	@Column("Float")
+	token_index?: Float
 
 	@Column("String")
 	token_address?: String
@@ -284,6 +300,18 @@ export class LPPosition extends AbstractEntity  {
 
 	@Column("Float")
 	token_amount_usd?: Float
+
+	@Column("Float")
+	tvl_usd?: Float
+
+	@Column("Float")
+	ratio?: Float
+
+	@Column("Float")
+	pool_token_amount?: Float
+
+	@Column("Float")
+	liquidity_token_amount?: Float
   constructor(data: LPPositionConstructorInput) {super()}
   
 }
@@ -296,7 +324,7 @@ interface LPPositionSnapshotConstructorInput {
   chain_id?: Int;
   pool_address?: String;
   user_address?: String;
-  token_index?: BigInt;
+  token_index?: Float;
   token_address?: String;
   token_symbol?: String;
   token_amount?: Float;
@@ -324,8 +352,8 @@ export class LPPositionSnapshot extends AbstractEntity  {
 	@Column("String")
 	user_address?: String
 
-	@Column("BigInt")
-	token_index?: BigInt
+	@Column("Float")
+	token_index?: Float
 
 	@Column("String")
 	token_address?: String
@@ -349,7 +377,7 @@ interface PoolSnapshotConstructorInput {
   block_date?: String;
   chain_id?: Int;
   pool_address?: String;
-  token_index?: BigInt;
+  token_index?: Float;
   token_address?: String;
   token_symbol?: String;
   token_amount?: Float;
@@ -380,8 +408,8 @@ export class PoolSnapshot extends AbstractEntity  {
 	@Column("String")
 	pool_address?: String
 
-	@Column("BigInt")
-	token_index?: BigInt
+	@Column("Float")
+	token_index?: Float
 
 	@Column("String")
 	token_address?: String
@@ -419,10 +447,10 @@ export class PoolSnapshot extends AbstractEntity  {
 
 interface TradesConstructorInput {
   id: ID;
-  timestamp?: Timestamp;
+  timestamp?: Int;
   chain_id?: Int;
-  block_number?: BigInt;
-  log_index?: BigInt;
+  block_number?: Int;
+  log_index?: Int;
   transaction_hash?: String;
   user_address?: String;
   taker_address?: String;
@@ -438,6 +466,7 @@ interface TradesConstructorInput {
   spot_price_after_swap?: Float;
   swap_amount_usd?: Float;
   fees_usd?: Float;
+  sqrt_price_x96?: String;
 }
 @Entity("Trades")
 export class Trades extends AbstractEntity  {
@@ -446,17 +475,17 @@ export class Trades extends AbstractEntity  {
 	@Column("ID")
 	id: ID
 
-	@Column("Timestamp")
-	timestamp?: Timestamp
+	@Column("Int")
+	timestamp?: Int
 
 	@Column("Int")
 	chain_id?: Int
 
-	@Column("BigInt")
-	block_number?: BigInt
+	@Column("Int")
+	block_number?: Int
 
-	@Column("BigInt")
-	log_index?: BigInt
+	@Column("Int")
+	log_index?: Int
 
 	@Column("String")
 	transaction_hash?: String
@@ -502,6 +531,9 @@ export class Trades extends AbstractEntity  {
 
 	@Column("Float")
 	fees_usd?: Float
+
+	@Column("String")
+	sqrt_price_x96?: String
   constructor(data: TradesConstructorInput) {super()}
   
 }
@@ -817,6 +849,116 @@ export class IncentiveClaimData extends AbstractEntity  {
 }
 
 
+interface LiquidityTransactionEventConstructorInput {
+  id: ID;
+  timestamp?: Int;
+  chain_id?: Int;
+  block_number?: Int;
+  log_index?: Int;
+  transaction_hash?: String;
+  user_address?: String;
+  taker_address?: String;
+  pool_address?: String;
+  token_address?: String;
+  token_index?: Int;
+  token_amount?: Float;
+  token_amount_usd?: Float;
+  event_type?: String;
+}
+@Entity("LiquidityTransactionEvent")
+export class LiquidityTransactionEvent extends AbstractEntity  {
+
+	@Required
+	@Column("ID")
+	id: ID
+
+	@Column("Int")
+	timestamp?: Int
+
+	@Column("Int")
+	chain_id?: Int
+
+	@Column("Int")
+	block_number?: Int
+
+	@Column("Int")
+	log_index?: Int
+
+	@Column("String")
+	transaction_hash?: String
+
+	@Column("String")
+	user_address?: String
+
+	@Column("String")
+	taker_address?: String
+
+	@Column("String")
+	pool_address?: String
+
+	@Column("String")
+	token_address?: String
+
+	@Column("Int")
+	token_index?: Int
+
+	@Column("Float")
+	token_amount?: Float
+
+	@Column("Float")
+	token_amount_usd?: Float
+
+	@Column("String")
+	event_type?: String
+  constructor(data: LiquidityTransactionEventConstructorInput) {super()}
+  
+}
+
+
+interface Diesel_TotalSupplyEventConstructorInput {
+  id: ID;
+  time: Int;
+  block_height: Int;
+  transaction_id: String;
+  asset: String;
+  supply: BigInt;
+  sender: String;
+}
+@Entity("Diesel_TotalSupplyEvent")
+export class Diesel_TotalSupplyEvent extends AbstractEntity  {
+
+	@Required
+	@Column("ID")
+	id: ID
+
+	@Required
+	@Column("Int")
+	time: Int
+
+	@Required
+	@Column("Int")
+	block_height: Int
+
+	@Required
+	@Column("String")
+	transaction_id: String
+
+	@Required
+	@Column("String")
+	asset: String
+
+	@Required
+	@Column("BigInt")
+	supply: BigInt
+
+	@Required
+	@Column("String")
+	sender: String
+  constructor(data: Diesel_TotalSupplyEventConstructorInput) {super()}
+  
+}
+
+
 const source = `type UserScoreSnapshot @entity {
   id: ID!
   timestamp: Int
@@ -853,8 +995,8 @@ type Pool @entity {
   lp_token_symbol: String!
   token_address: String!
   token_symbol: String!
-  token_decimals: String!
-  token_index: BigInt!
+  token_decimals: Float!
+  token_index: Float!
   fee_rate: Float
   dex_type: String!
   token_amount: Float!
@@ -871,17 +1013,25 @@ type Pool @entity {
   decimals_0: Int
   decimals_1: Int
   tvl_usd: Float
+  tvl: BigInt
+  exchange_rate: BigInt
+
+  lp_amount: BigInt
 }
 
 type LPPosition @entity {
   id: ID!
   pool_address: String
   user_address: String
-  token_index: BigInt
+  token_index: Float
   token_address: String
   token_symbol: String
   token_amount: Float
   token_amount_usd: Float
+  tvl_usd: Float
+  ratio: Float
+  pool_token_amount: Float
+  liquidity_token_amount: Float
 }
 
 type LPPositionSnapshot @entity {
@@ -891,7 +1041,7 @@ type LPPositionSnapshot @entity {
   chain_id: Int
   pool_address: String
   user_address: String
-  token_index: BigInt
+  token_index: Float
   token_address: String
   token_symbol: String
   token_amount: Float
@@ -904,7 +1054,7 @@ type PoolSnapshot @entity {
   block_date: String
   chain_id: Int
   pool_address: String
-  token_index: BigInt
+  token_index: Float
   token_address: String
   token_symbol: String
   token_amount: Float
@@ -919,10 +1069,10 @@ type PoolSnapshot @entity {
 
 type Trades @entity {
   id: ID!
-  timestamp: Timestamp
+  timestamp: Int
   chain_id: Int
-  block_number: BigInt
-  log_index: BigInt
+  block_number: Int
+  log_index: Int
   transaction_hash: String
   user_address: String
   taker_address: String
@@ -938,6 +1088,7 @@ type Trades @entity {
   spot_price_after_swap: Float
   swap_amount_usd: Float
   fees_usd: Float
+  sqrt_price_x96: String
 }
 
 type V2Mints @entity {
@@ -1019,6 +1170,33 @@ type IncentiveClaimData @entity {
   amount_usd: Float
   other_incentive_usd: Float
 }
+
+type LiquidityTransactionEvent @entity {
+  id: ID!
+  timestamp: Int
+  chain_id: Int
+  block_number: Int
+  log_index: Int
+  transaction_hash: String
+  user_address: String
+  taker_address: String
+  pool_address: String
+  token_address: String
+  token_index: Int
+  token_amount: Float
+  token_amount_usd: Float
+  event_type: String
+}
+
+type Diesel_TotalSupplyEvent @entity {
+  id: ID!
+  time: Int!
+  block_height: Int!
+  transaction_id: String!
+  asset: String!
+  supply: BigInt!
+  sender: String!
+}
 `
 DatabaseSchema.register({
   source,
@@ -1035,6 +1213,8 @@ DatabaseSchema.register({
 		"V2Burns": V2Burns,
 		"V2Syncs": V2Syncs,
 		"V2Transfers": V2Transfers,
-		"IncentiveClaimData": IncentiveClaimData
+		"IncentiveClaimData": IncentiveClaimData,
+		"LiquidityTransactionEvent": LiquidityTransactionEvent,
+		"Diesel_TotalSupplyEvent": Diesel_TotalSupplyEvent
   }
 })

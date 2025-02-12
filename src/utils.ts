@@ -1,12 +1,14 @@
 import crypto from "crypto";
-import { Balance, Pool } from "./schema/store.js";
+import { Balance, LPPosition, Pool } from "./schema/store.js";
 import { getPriceBySymbol } from "@sentio/sdk/utils";
 import { BN } from "fuels";
 
 const USDC_ID =
   "0x286c479da40dc953bddc3bb4c453b608bba2e0ac483b077bd475174115395e6b";
-let ETH_ID =
+const ETH_ID =
   "0xf8f8b6283d7fa5b672b530cbb84fcccb4ff8dc40f8176ef4544ddb1f1952ad07";
+const FUEL_ID =
+  "0x1d5d97005e41cae2187a895fd8eab0506111e0e2f3331cd3912c15c24e3c1d82";
 
 export function poolIdToStr(poolId: any): string {
   return `${poolId[0].bits}_${poolId[1].bits}_${poolId[2]}`;
@@ -114,7 +116,8 @@ export const calculateFee = (is_stable: boolean, amount: bigint): bigint => {
     ? ammFees.lpFeeStable + ammFees.protocolFeeStable
     : ammFees.lpFeeVolatile + ammFees.protocolFeeVolatile;
   const nominator = amount * feeBP;
-  return roundingUpDivision(nominator, BASIS_POINTS);
+  // return roundingUpDivision(nominator, BASIS_POINTS);
+  return nominator;
 };
 
 export const getPoolTvl = (pool: Pool, eth_usd: number, usdc_usd: number) => {
@@ -161,4 +164,88 @@ export function formatTimestamp(date: Date) {
   ).padStart(2, "0")}:00:00`;
 
   return { dailySnapshot, hourlySnapshot };
+}
+
+export function updatePoolTokenAmountUsd(
+  pool0: Pool,
+  pool1: Pool,
+  eth_usd: number,
+  usdc_usd: number,
+  fuel_usd: number
+) {
+  if (pool0.token_address === ETH_ID || pool1.token_address === ETH_ID) {
+    if (pool1.token_address === ETH_ID) {
+      pool1.token_amount_usd = pool1.token_amount * eth_usd;
+
+      pool0.token_amount_usd = pool1.token_amount_usd;
+    } else {
+      pool0.token_amount_usd = pool0.token_amount * eth_usd;
+
+      pool1.token_amount_usd = pool0.token_amount_usd;
+    }
+  } else if (
+    pool0.token_address === USDC_ID ||
+    pool1.token_address === USDC_ID
+  ) {
+    if (pool1.token_address === USDC_ID) {
+      pool1.token_amount_usd = pool1.token_amount * usdc_usd;
+
+      pool0.token_amount_usd = pool1.token_amount_usd;
+    } else {
+      pool0.token_amount_usd = pool0.token_amount * usdc_usd;
+
+      pool1.token_amount_usd = pool0.token_amount_usd;
+    }
+  } else if (
+    pool0.token_address === FUEL_ID ||
+    pool1.token_address === FUEL_ID
+  ) {
+    if (pool1.token_address === FUEL_ID) {
+      pool1.token_amount_usd = pool1.token_amount * fuel_usd;
+
+      pool0.token_amount_usd = pool1.token_amount_usd;
+    } else {
+      pool0.token_amount_usd = pool0.token_amount * fuel_usd;
+
+      pool1.token_amount_usd = pool0.token_amount_usd;
+    }
+  }
+
+  return { pool0, pool1 };
+}
+
+export async function updatePositionAmount(
+  pool0: Pool,
+  pool1: Pool,
+  position: LPPosition,
+  ratio: number,
+  ctx: any
+) {
+  if (position.token_index === 0) {
+    position.token_amount_usd = ratio * pool0.token_amount_usd!;
+    position.ratio = ratio;
+    await ctx.store.upsert(position);
+  } else {
+    position.ratio = ratio;
+    position.token_amount_usd = ratio * pool1.token_amount_usd!;
+    await ctx.store.upsert(position);
+  }
+}
+
+export function getTokenAmountUsd(
+  pool: Pool,
+  token_amount: number,
+  eth_usd: number,
+  usdc_usd: number,
+  fuel_usd: number
+) {
+  if (pool.token_address === ETH_ID) {
+    return token_amount * eth_usd;
+  } else if (pool.token_address === USDC_ID) {
+    return token_amount * usdc_usd;
+  } else if (pool.token_address === FUEL_ID) {
+    return token_amount * fuel_usd;
+  } else {
+    return null;
+  }
 }

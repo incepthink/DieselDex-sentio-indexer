@@ -12,10 +12,13 @@ import {
 } from "./types/fuel/DieselAmmContract.js";
 import {
   Balance,
+  Diesel_TotalSupplyEvent,
+  LiquidityTransactionEvent,
   LPPosition,
   LPPositionSnapshot,
   Pool,
   PoolSnapshot,
+  Trades,
   UserScoreSnapshot,
   V2Burns,
   V2Mints,
@@ -26,10 +29,13 @@ import {
   formatTimestamp,
   getHash,
   getPoolTvl,
+  getTokenAmountUsd,
   identityToStr,
   poolIdToStr,
   updateBalance,
   updateBalanceByPool,
+  updatePoolTokenAmountUsd,
+  updatePositionAmount,
 } from "./utils.js";
 import { BN } from "fuels";
 import { getPriceBySymbol, token } from "@sentio/sdk/utils";
@@ -37,13 +43,15 @@ import { tokenConfig } from "./tokenConfig.js";
 
 const USDC_ID =
   "0x286c479da40dc953bddc3bb4c453b608bba2e0ac483b077bd475174115395e6b";
-let ETH_ID =
+const ETH_ID =
   "0xf8f8b6283d7fa5b672b530cbb84fcccb4ff8dc40f8176ef4544ddb1f1952ad07";
+const FUEL_ID =
+  "0x1d5d97005e41cae2187a895fd8eab0506111e0e2f3331cd3912c15c24e3c1d82";
 
 DieselAmmContractProcessor.bind({
   address: "0x7c293b054938bedca41354203be4c08aec2c3466412cac803f4ad62abf22e476",
   chainId: FuelNetwork.MAIN_NET,
-  startBlock: 11000000n,
+  startBlock: 9000000n,
 })
   .onLogCreatePoolEvent(async (log, ctx) => {
     // const pool = new Pool({
@@ -84,25 +92,32 @@ DieselAmmContractProcessor.bind({
       } else {
         index = 1;
       }
-    } else {
-      symbol = tokenConfig[asset_0_id].symbol;
+    } else if (asset_0_id === FUEL_ID || asset_1_id === FUEL_ID) {
+      symbol = "FUEL";
       decimals = 9;
-      address = asset_0_id;
-      index = 0;
+      address = FUEL_ID;
+      if (asset_0_id === FUEL_ID) {
+        index = 0;
+      } else {
+        index = 1;
+      }
+    } else {
+      // Skip pools which dont have eth or usdc
+      return;
     }
 
-    const pool = new Pool({
+    const pool0 = new Pool({
       id: poolIdToStr(log.data.pool_id),
-      chain_id: 1,
+      chain_id: 9889,
       creation_block_number: Number(ctx.transaction?.blockNumber) || 0,
       timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
       pool_address: poolIdToStr(log.data.pool_id),
       lp_token_address: "na",
       lp_token_symbol: "na",
-      token_address: address,
-      token_symbol: symbol,
-      token_decimals: decimals.toString(),
-      token_index: BigInt(index),
+      token_address: log.data.pool_id[0].bits,
+      token_symbol: tokenConfig[log.data.pool_id[0].bits].symbol,
+      token_decimals: tokenConfig[log.data.pool_id[0].bits].decimal,
+      token_index: 0,
       dex_type: "CPMM",
       token_amount: 0,
       volume_amount: 0,
@@ -117,10 +132,45 @@ DieselAmmContractProcessor.bind({
       reserve_1: 0n,
       decimals_0: Number(log.data.decimals_0),
       decimals_1: Number(log.data.decimals_1),
-      fee_rate: log.data.pool_id[2] ? 0.05 : 0.3,
+      fee_rate: log.data.pool_id[2] ? 0.0005 : 0.003,
+      tvl: 0n,
     });
-    console.log("LOG FROM PROCESSOR--------------------");
-    await ctx.store.upsert(pool);
+
+    const pool1 = new Pool({
+      id: getHash(poolIdToStr(log.data.pool_id)),
+      chain_id: 9889,
+      creation_block_number: Number(ctx.transaction?.blockNumber) || 0,
+      timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
+      pool_address: poolIdToStr(log.data.pool_id),
+      lp_token_address: "na",
+      lp_token_symbol: "na",
+      token_address: log.data.pool_id[1].bits,
+      token_symbol: tokenConfig[log.data.pool_id[1].bits].symbol,
+      token_decimals: tokenConfig[log.data.pool_id[1].bits].decimal,
+      token_index: 1,
+      dex_type: "CPMM",
+      token_amount: 0,
+      volume_amount: 0,
+      total_fees_usd: 0,
+      volume_usd: 0,
+      token_amount_usd: 0,
+
+      asset_0: log.data.pool_id[0].bits,
+      asset_1: log.data.pool_id[1].bits,
+      is_stable: log.data.pool_id[2],
+      reserve_0: 0n,
+      reserve_1: 0n,
+      decimals_0: Number(log.data.decimals_0),
+      decimals_1: Number(log.data.decimals_1),
+      fee_rate: log.data.pool_id[2] ? 0.0005 : 0.003,
+      tvl: 0n,
+    });
+
+    pool0.tvl_usd = pool0.token_amount_usd! * 2;
+    pool1.tvl_usd = pool1.token_amount_usd! * 2;
+
+    await ctx.store.upsert(pool0);
+    await ctx.store.upsert(pool1);
   })
   .onLogMintEvent(async (log, ctx) => {
     try {
@@ -129,10 +179,21 @@ DieselAmmContractProcessor.bind({
 
       const address = log.data.recipient.Address?.bits || "0x";
 
+      const asset_0_id = log.data.pool_id[0].bits;
+      const asset_1_id = log.data.pool_id[1].bits;
+
       const poolId = poolIdToStr(log.data.pool_id);
 
       const eth_usd = (await getPriceBySymbol("ETH", new Date())) || 3196;
       const usdc_usd = (await getPriceBySymbol("USDC", new Date())) || 1;
+      const fuel_usd = (await getPriceBySymbol("FUEL", new Date())) || 0.017;
+
+      const pool0 = await ctx.store.get(Pool, poolId);
+      const pool1 = await ctx.store.get(Pool, getHash(poolId));
+
+      if (!pool0 || !pool1) {
+        throw new Error("Pool not found");
+      }
 
       // STORE V2 MINTS
       const mintId = getHash(
@@ -146,9 +207,9 @@ DieselAmmContractProcessor.bind({
         const v2mint = new V2Mints({
           id: mintId,
           timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          chain_id: Number(ctx.chainId),
+          chain_id: 9889,
           block_number: Number(ctx.transaction?.blockNumber) || 0,
-          log_index: 0,
+          log_index: log.receiptIndex,
           transaction_hash: ctx.transaction?.id,
           transaction_from_address: address,
           from_address: ctx.transaction?.sender,
@@ -171,9 +232,9 @@ DieselAmmContractProcessor.bind({
         const v2mint = new V2Mints({
           id: mintId,
           timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          chain_id: Number(ctx.chainId),
+          chain_id: 9889,
           block_number: Number(ctx.transaction?.blockNumber) || 0,
-          log_index: 0,
+          log_index: log.receiptIndex,
           transaction_hash: ctx.transaction?.id,
           transaction_from_address: address,
           from_address: ctx.transaction?.sender,
@@ -192,313 +253,284 @@ DieselAmmContractProcessor.bind({
       }
 
       // UPDATE POOL DATA
-      const pool = await ctx.store.get(Pool, poolId);
 
-      if (!pool) {
-        throw new Error("Pool not found");
-      }
+      // set the lp id
+      pool0.pool_address = log.data.liquidity.id.bits;
+      pool1.pool_address = log.data.liquidity.id.bits;
 
-      pool.reserve_0 += asset_0_in;
-      pool.reserve_1 += asset_1_in;
+      // update the reserves
+      pool0.reserve_0 = BigInt(
+        log.data.asset_0_in.add(pool0.reserve_0.toString()).toString()
+      );
+      pool0.reserve_1 = BigInt(
+        log.data.asset_1_in.add(pool0.reserve_1.toString()).toString()
+      );
+      pool1.reserve_0 = BigInt(
+        log.data.asset_0_in.add(pool1.reserve_0.toString()).toString()
+      );
+      pool1.reserve_1 = BigInt(
+        log.data.asset_1_in.add(pool1.reserve_1.toString()).toString()
+      );
 
-      pool.lp_token_address = log.data.liquidity.id.bits;
-      pool.lp_token_symbol = `${tokenConfig[pool.asset_0!].symbol}-${
-        tokenConfig[pool.asset_1!].symbol
+      // update token metadata
+      pool0.lp_token_address = log.data.liquidity.id.bits;
+      pool0.lp_token_symbol = `${tokenConfig[pool0.asset_0!].symbol}-${
+        tokenConfig[pool0.asset_1!].symbol
+      } LP`;
+      pool1.lp_token_address = log.data.liquidity.id.bits;
+      pool1.lp_token_symbol = `${tokenConfig[pool1.asset_0!].symbol}-${
+        tokenConfig[pool1.asset_1!].symbol
       } LP`;
 
-      if (Number(pool.token_index) === 0) {
-        pool.token_amount = Number(pool.reserve_0);
-        if (pool.asset_0 === ETH_ID) {
-          pool.token_amount_usd =
-            (Number(pool.reserve_0) / 10 ** pool.decimals_0!) * eth_usd;
-        } else if (pool.asset_0 === USDC_ID) {
-          pool.token_amount_usd =
-            (Number(pool.reserve_0) / 10 ** pool.decimals_0!) * usdc_usd;
+      // update token amount
+      pool1.token_amount = Number(pool1.reserve_1) / 10 ** pool0.decimals_1!;
+      pool0.token_amount = Number(pool0.reserve_0) / 10 ** pool0.decimals_0!;
+
+      // set token amount usd
+      if (pool0.token_address === ETH_ID || pool1.token_address === ETH_ID) {
+        if (pool1.token_address === ETH_ID) {
+          pool1.token_amount_usd = pool1.token_amount * eth_usd;
+
+          pool0.token_amount_usd = pool1.token_amount_usd;
+        } else {
+          pool0.token_amount_usd = pool0.token_amount * eth_usd;
+
+          pool1.token_amount_usd = pool0.token_amount_usd;
         }
-      } else {
-        pool.token_amount = Number(pool.reserve_1);
-        if (pool.asset_1 === ETH_ID) {
-          pool.token_amount_usd =
-            (Number(pool.reserve_1) / 10 ** pool.decimals_1!) * eth_usd;
-        } else if (pool.asset_1 === USDC_ID) {
-          pool.token_amount_usd =
-            (Number(pool.reserve_1) / 10 ** pool.decimals_1!) * usdc_usd;
+      } else if (
+        pool0.token_address === USDC_ID ||
+        pool1.token_address === USDC_ID
+      ) {
+        if (pool1.token_address === USDC_ID) {
+          pool1.token_amount_usd = pool1.token_amount * usdc_usd;
+
+          pool0.token_amount_usd = pool1.token_amount_usd;
+        } else {
+          pool0.token_amount_usd = pool0.token_amount * usdc_usd;
+
+          pool1.token_amount_usd = pool0.token_amount_usd;
+        }
+      } else if (
+        pool0.token_address === FUEL_ID ||
+        pool1.token_address === FUEL_ID
+      ) {
+        if (pool1.token_address === FUEL_ID) {
+          pool1.token_amount_usd = pool1.token_amount * fuel_usd;
+
+          pool0.token_amount_usd = pool1.token_amount_usd;
+        } else {
+          pool0.token_amount_usd = pool0.token_amount * fuel_usd;
+
+          pool1.token_amount_usd = pool0.token_amount_usd;
         }
       }
 
-      await ctx.store.upsert(pool);
+      pool0.tvl_usd = pool0.token_amount_usd! * 2;
+      pool0.tvl = pool0.reserve_0 + pool0.reserve_1;
+      await ctx.store.upsert(pool0);
+
+      pool1.tvl_usd = pool1.token_amount_usd! * 2;
+      pool1.tvl = pool1.reserve_0 + pool1.reserve_1;
+      await ctx.store.upsert(pool1);
 
       // UPDATE LP POSITION
 
-      const positionId = getHash(`${address}-${poolIdToStr(log.data.pool_id)}`);
-      console.log("PositionID ", positionId);
+      const positionId0 = getHash(
+        `${address}-${poolIdToStr(log.data.pool_id)}`
+      );
+      const positionId1 = getHash(
+        `${address}-${getHash(poolIdToStr(log.data.pool_id))}`
+      );
 
-      let position = await ctx.store.get(LPPosition, positionId);
-      let token_amount = 0;
-      let token_amount_usd = 0;
-      let price_usd = 0;
+      let position0 = await ctx.store.get(LPPosition, positionId0);
+      let position1 = await ctx.store.get(LPPosition, positionId1);
 
-      if (pool.token_symbol === "ETH" || "USDC") {
-        price_usd =
-          (await getPriceBySymbol(pool.token_symbol, new Date())) || 0;
-      }
+      // store the mint amount
+      let token_amount0 = Number(asset_0_in) / 10 ** pool0.decimals_0!;
+      let token_amount1 = Number(asset_1_in) / 10 ** pool1.decimals_1!;
 
-      console.log("price", pool.token_symbol, " ", price_usd);
+      console.log("pool0 symbol", pool0.token_symbol);
+      console.log("pool1 symbol", pool1.token_symbol);
 
-      if (Number(pool.token_index) === 0) {
-        token_amount = Number(asset_0_in) / 10 ** pool.decimals_0!;
-        token_amount_usd = token_amount * price_usd;
-      } else {
-        token_amount = Number(asset_1_in) / 10 ** pool.decimals_1!;
-        token_amount_usd = token_amount * price_usd;
-      }
+      const liquidity = await ctx.store.get(
+        Diesel_TotalSupplyEvent,
+        log.data.liquidity.id.bits
+      );
 
-      if (!position) {
-        const newPosition = new LPPosition({
-          id: positionId,
-          pool_address: poolIdToStr(log.data.pool_id),
+      // store the position of token 0
+      if (!position0) {
+        // const ratio = token_amount0 / Number(pool0.token_amount);
+
+        const ratio =
+          Number(log.data.liquidity.amount.toString()) /
+          Number(liquidity!.supply);
+
+        let token_amount_usd = Number(ratio * pool0.token_amount_usd!);
+
+        const newPosition0 = new LPPosition({
+          id: positionId0,
+          pool_address: log.data.liquidity.id.bits,
           user_address: address,
-          token_index: pool.token_index,
-          token_address: pool.token_address,
-          token_symbol: pool.token_symbol,
-          token_amount: token_amount,
+          token_index: pool0.token_index,
+          token_address: pool0.token_address,
+          token_symbol: pool0.token_symbol,
+          token_amount: token_amount0,
           token_amount_usd: token_amount_usd,
+          ratio: ratio,
+          pool_token_amount: pool0.token_amount_usd,
+          liquidity_token_amount: Number(log.data.liquidity.amount.toString()),
         });
 
-        await ctx.store.upsert(newPosition);
+        await ctx.store.upsert(newPosition0);
       } else {
-        position.token_amount! += token_amount;
-        position.token_amount_usd! += token_amount_usd;
-        await ctx.store.upsert(position);
-      }
-
-      // STORE POOL SNAPSHOT
-
-      const { dailySnapshot, hourlySnapshot } = formatTimestamp(ctx.timestamp);
-      const dailySnapshotId = getHash(`${log.data.pool_id}_${dailySnapshot}`);
-      const hourlySnapshotId = getHash(`${log.data.pool_id}_${hourlySnapshot}`);
-
-      // STORE POOL SNAPSHOT DAILY
-      const snapshotDaily = await ctx.store.get(PoolSnapshot, dailySnapshotId);
-
-      if (!snapshotDaily) {
-        const newSnapDaily = new PoolSnapshot({
-          id: dailySnapshotId,
-          chain_id: 1,
-          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          pool_address: poolIdToStr(log.data.pool_id),
-          block_date: dailySnapshot,
-          token_index: pool.token_index,
-          token_address: pool.token_address,
-          token_symbol: pool.token_symbol,
-          token_amount: pool.token_amount,
-          token_amount_usd: pool.token_amount_usd,
-          volume_amount: pool.volume_amount,
-          volume_usd: pool.volume_usd,
-          fee_rate: pool.fee_rate,
-          total_fees_usd: pool.total_fees_usd,
-          user_fees_usd: pool.total_fees_usd,
-          protocol_fees_usd: 0,
-        });
-
-        await ctx.store.upsert(newSnapDaily);
-      } else {
-        snapshotDaily.timestamp = Math.floor(
-          new Date(ctx.timestamp).getTime() / 1000
+        position0.token_amount! = position0.token_amount! + token_amount0;
+        position0.liquidity_token_amount! += Number(
+          log.data.liquidity.amount.toString()
         );
-        snapshotDaily.block_date = dailySnapshot;
-        snapshotDaily.token_amount = pool.token_amount;
-        snapshotDaily.token_amount_usd = pool.token_amount_usd;
-        snapshotDaily.volume_amount = pool.volume_amount;
-        snapshotDaily.volume_usd = pool.volume_usd;
-        snapshotDaily.total_fees_usd = pool.total_fees_usd;
-        snapshotDaily.user_fees_usd = pool.total_fees_usd;
 
-        await ctx.store.upsert(snapshotDaily);
+        // const ratio =
+        //   Number(position0.token_amount!.toString()) /
+        //   Number(pool0.token_amount);
+
+        const ratio =
+          position0.liquidity_token_amount! / Number(liquidity!.supply);
+
+        let token_amount_usd = Number(ratio * pool0.token_amount_usd!);
+
+        position0.token_amount_usd! = token_amount_usd;
+
+        position0.tvl_usd! = token_amount_usd;
+        position0.token_amount_usd = token_amount_usd;
+        position0.ratio = ratio;
+        position0.pool_token_amount = pool0.token_amount_usd;
+
+        await ctx.store.upsert(position0);
       }
 
-      // STORE POOL SNAPSHOT Hourly
-      const snapshotHourly = await ctx.store.get(
-        PoolSnapshot,
-        hourlySnapshotId
-      );
+      if (!position1) {
+        // const ratio = token_amount1 / Number(pool1.token_amount);
+        const ratio =
+          Number(log.data.liquidity.amount.toString()) /
+          Number(liquidity!.supply);
 
-      if (!snapshotHourly) {
-        const newSnapHourly = new PoolSnapshot({
-          id: hourlySnapshotId,
-          chain_id: 1,
-          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          pool_address: poolIdToStr(log.data.pool_id),
-          block_date: hourlySnapshot,
-          token_index: pool.token_index,
-          token_address: pool.token_address,
-          token_symbol: pool.token_symbol,
-          token_amount: pool.token_amount,
-          token_amount_usd: pool.token_amount_usd,
-          volume_amount: pool.volume_amount,
-          volume_usd: pool.volume_usd,
-          fee_rate: pool.fee_rate,
-          total_fees_usd: pool.total_fees_usd,
-          user_fees_usd: pool.total_fees_usd,
-          protocol_fees_usd: 0,
-        });
+        let token_amount_usd = Number(ratio * pool0.token_amount_usd!);
 
-        await ctx.store.upsert(newSnapHourly);
-      } else {
-        snapshotHourly.timestamp = Math.floor(
-          new Date(ctx.timestamp).getTime() / 1000
-        );
-        snapshotHourly.block_date = hourlySnapshot;
-        snapshotHourly.token_amount = pool.token_amount;
-        snapshotHourly.token_amount_usd = pool.token_amount_usd;
-        snapshotHourly.volume_amount = pool.volume_amount;
-        snapshotHourly.volume_usd = pool.volume_usd;
-        snapshotHourly.total_fees_usd = pool.total_fees_usd;
-        snapshotHourly.user_fees_usd = pool.total_fees_usd;
-
-        await ctx.store.upsert(snapshotHourly);
-      }
-
-      // STORE LP SNAPSHOT
-
-      const dailySnapshotIdLP = getHash(
-        `${log.data.liquidity.id}_${dailySnapshot}`
-      );
-      const hourlySnapshotIdLP = getHash(
-        `${log.data.liquidity.id}_${hourlySnapshot}`
-      );
-
-      // STORE LP SNAPSHOT DAILY
-      const snapshotDailyLP = await ctx.store.get(
-        LPPositionSnapshot,
-        dailySnapshotIdLP
-      );
-
-      if (!snapshotDailyLP) {
-        const newSnapDaily = new LPPositionSnapshot({
-          id: dailySnapshotIdLP,
-          chain_id: 1,
-          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          pool_address: poolIdToStr(log.data.pool_id),
+        const newPosition1 = new LPPosition({
+          id: positionId1,
+          pool_address: log.data.liquidity.id.bits,
           user_address: address,
-          block_date: dailySnapshot,
-          token_index: pool.token_index,
-          token_address: pool.token_address,
-          token_symbol: pool.token_symbol,
-          token_amount: pool.token_amount,
-          token_amount_usd: pool.token_amount_usd,
+          token_index: pool1.token_index,
+          token_address: pool1.token_address,
+          token_symbol: pool1.token_symbol,
+          token_amount: token_amount1,
+          token_amount_usd: token_amount_usd,
+          ratio: ratio,
+          pool_token_amount: pool1.token_amount_usd,
+          liquidity_token_amount: Number(log.data.liquidity.amount.toString()),
         });
 
-        await ctx.store.upsert(newSnapDaily);
+        await ctx.store.upsert(newPosition1);
       } else {
-        snapshotDailyLP.timestamp = Math.floor(
-          new Date(ctx.timestamp).getTime() / 1000
+        position1.token_amount! = position1.token_amount! + token_amount1;
+        position1.liquidity_token_amount! += Number(
+          log.data.liquidity.amount.toString()
         );
-        snapshotDailyLP.block_date = dailySnapshot;
-        snapshotDailyLP.token_amount = pool.token_amount;
-        snapshotDailyLP.token_amount_usd = pool.token_amount_usd;
 
-        await ctx.store.upsert(snapshotDailyLP);
+        // const ratio =
+        //   Number(position1.token_amount!.toString()) /
+        //   Number(pool1.token_amount);
+
+        const ratio =
+          position1.liquidity_token_amount! / Number(liquidity!.supply);
+
+        let token_amount_usd = Number(ratio * pool0.token_amount_usd!);
+
+        position1.token_amount_usd! = token_amount_usd;
+
+        position1.tvl_usd! = token_amount_usd;
+        position1.token_amount_usd = token_amount_usd;
+        position1.ratio = ratio;
+        position1.pool_token_amount = pool1.token_amount;
+
+        await ctx.store.upsert(position1);
       }
 
-      // STORE LP SNAPSHOT Hourly
-      const snapshotHourlyLP = await ctx.store.get(
-        LPPositionSnapshot,
-        hourlySnapshotIdLP
+      // update all lp positions
+      const positions = ctx.store.listIterator(LPPosition, [
+        { field: "pool_address", op: "=", value: log.data.liquidity.id.bits },
+      ]);
+
+      for await (const position of positions) {
+        const ratio =
+          Number(position!.token_amount!.toString()) /
+          Number(liquidity!.supply);
+        await updatePositionAmount(pool0, pool1, position, ratio, ctx);
+      }
+
+      // STORE LIQUIDITY TRANSACTION EVENT
+      const eventData = {
+        token_address: "",
+        token_index: 0,
+        token_amount: 0,
+        token_amount_usd: 0,
+      };
+
+      if (asset_0_id === ETH_ID || asset_1_id === ETH_ID) {
+        eventData.token_address = ETH_ID;
+        if (asset_0_id === ETH_ID) {
+          eventData.token_index = 0;
+          eventData.token_amount = Number(asset_0_in) / 10 ** pool0.decimals_0!;
+          eventData.token_amount_usd =
+            (Number(asset_0_in) / 10 ** pool0.decimals_0!) * eth_usd;
+        } else {
+          eventData.token_index = 1;
+          eventData.token_amount = Number(asset_1_in) / 10 ** pool0.decimals_1!;
+          eventData.token_amount_usd =
+            (Number(asset_1_in) / 10 ** pool0.decimals_1!) * eth_usd;
+        }
+      } else if (asset_0_id === USDC_ID || asset_1_id === USDC_ID) {
+        eventData.token_address = USDC_ID;
+        if (asset_0_id === USDC_ID) {
+          eventData.token_index = 0;
+          eventData.token_amount = Number(asset_0_in) / 10 ** pool0.decimals_0!;
+          eventData.token_amount_usd =
+            (Number(asset_0_in) / 10 ** pool0.decimals_0!) * usdc_usd;
+        } else {
+          eventData.token_index = 1;
+          eventData.token_amount = Number(asset_1_in) / 10 ** pool0.decimals_1!;
+          eventData.token_amount_usd =
+            (Number(asset_1_in) / 10 ** pool0.decimals_1!) * usdc_usd;
+        }
+      } else {
+        return;
+      }
+
+      const liqTransId = getHash(
+        `${ctx.transaction?.id}_${address}_${Math.floor(
+          new Date(ctx.timestamp).getTime() / 1000
+        )}`
       );
 
-      if (!snapshotHourlyLP) {
-        const newSnapHourly = new LPPositionSnapshot({
-          id: hourlySnapshotIdLP,
-          chain_id: 1,
-          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          pool_address: poolIdToStr(log.data.pool_id),
-          user_address: address,
-          block_date: hourlySnapshot,
-          token_index: pool.token_index,
-          token_address: pool.token_address,
-          token_symbol: pool.token_symbol,
-          token_amount: pool.token_amount,
-          token_amount_usd: pool.token_amount_usd,
-        });
+      const newLiqTransaction = new LiquidityTransactionEvent({
+        id: liqTransId,
+        timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
+        chain_id: 9889,
+        block_number: Number(ctx.transaction?.blockNumber),
+        log_index: log.receiptIndex,
+        transaction_hash: ctx.transaction?.id,
+        user_address: address,
+        taker_address: log.data.recipient.Address?.bits,
+        pool_address: poolId,
+        token_address: eventData.token_address,
+        token_index: eventData.token_index,
+        token_amount: eventData.token_amount,
+        token_amount_usd: eventData.token_amount_usd,
+        event_type: "deposit",
+      });
 
-        await ctx.store.upsert(newSnapHourly);
-      } else {
-        snapshotHourlyLP.timestamp = Math.floor(
-          new Date(ctx.timestamp).getTime() / 1000
-        );
-        snapshotHourlyLP.block_date = hourlySnapshot;
-        snapshotHourlyLP.token_amount = pool.token_amount;
-        snapshotHourlyLP.token_amount_usd = pool.token_amount_usd;
+      await ctx.store.upsert(newLiqTransaction);
 
-        await ctx.store.upsert(snapshotHourlyLP);
-      }
-
-      // STORE USER SCORE SNAPSHOT
-      let positionUser = await ctx.store.get(LPPosition, positionId);
-
-      const dailySnapshotIdUser = getHash(`${address}_${dailySnapshot}`);
-      const hourlySnapshotIdUser = getHash(`${address}_${hourlySnapshot}`);
-
-      // STORE USER SCORE SNAPSHOT DAILY
-      const snapshotDailyUser = await ctx.store.get(
-        UserScoreSnapshot,
-        dailySnapshotIdUser
-      );
-
-      if (!snapshotDailyUser) {
-        const newSnapDaily = new UserScoreSnapshot({
-          id: dailySnapshotIdUser,
-          chain_id: 1,
-          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          pool_address: poolIdToStr(log.data.pool_id),
-          user_address: address,
-          block_number: Number(ctx.transaction?.blockNumber),
-          block_date: dailySnapshot,
-          total_value_locked_score: positionUser?.token_amount_usd!,
-        });
-
-        await ctx.store.upsert(newSnapDaily);
-      } else {
-        snapshotDailyUser.timestamp = Math.floor(
-          new Date(ctx.timestamp).getTime() / 1000
-        );
-        snapshotDailyUser.block_date = dailySnapshot;
-        snapshotDailyUser.total_value_locked_score =
-          positionUser?.token_amount_usd!;
-
-        await ctx.store.upsert(snapshotDailyUser);
-      }
-
-      // STORE USER SCORE SNAPSHOT Hourly
-      const snapshotHourlyUser = await ctx.store.get(
-        UserScoreSnapshot,
-        hourlySnapshotIdUser
-      );
-
-      if (!snapshotHourlyUser) {
-        const newSnapHourly = new UserScoreSnapshot({
-          id: hourlySnapshotIdUser,
-          chain_id: 1,
-          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          pool_address: poolIdToStr(log.data.pool_id),
-          user_address: address,
-          block_number: Number(ctx.transaction?.blockNumber),
-          block_date: hourlySnapshot,
-          total_value_locked_score: positionUser?.token_amount_usd!,
-        });
-
-        await ctx.store.upsert(newSnapHourly);
-      } else {
-        snapshotHourlyUser.timestamp = Math.floor(
-          new Date(ctx.timestamp).getTime() / 1000
-        );
-        snapshotHourlyUser.block_date = hourlySnapshot;
-        snapshotHourlyUser.total_value_locked_score =
-          positionUser?.token_amount_usd!;
-
-        await ctx.store.upsert(snapshotHourlyUser);
-      }
+      log.data.liquidity.amount;
     } catch (error) {
       console.log("MINT ERROR", error);
     }
@@ -511,8 +543,19 @@ DieselAmmContractProcessor.bind({
 
       const poolId = poolIdToStr(log.data.pool_id);
 
+      const asset_0_id = log.data.pool_id[0].bits;
+      const asset_1_id = log.data.pool_id[1].bits;
+
       const eth_usd = (await getPriceBySymbol("ETH", new Date())) || 3196;
       const usdc_usd = (await getPriceBySymbol("USDC", new Date())) || 1;
+      const fuel_usd = (await getPriceBySymbol("FUEL", new Date())) || 0.017;
+
+      const pool0 = await ctx.store.get(Pool, poolId);
+      const pool1 = await ctx.store.get(Pool, getHash(poolId));
+
+      if (!pool0 || !pool1) {
+        throw new Error("Pool not found");
+      }
 
       // STORE V2 BURNS
       const burnId = getHash(
@@ -526,9 +569,9 @@ DieselAmmContractProcessor.bind({
         const v2Burns = new V2Burns({
           id: burnId,
           timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          chain_id: Number(ctx.chainId),
+          chain_id: 9889,
           block_number: Number(ctx.transaction?.blockNumber) || 0,
-          log_index: 0,
+          log_index: log.receiptIndex,
           transaction_hash: ctx.transaction?.id,
           transaction_from_address: address,
           from_address: ctx.transaction?.sender,
@@ -551,9 +594,9 @@ DieselAmmContractProcessor.bind({
         const v2Burns = new V2Burns({
           id: burnId,
           timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          chain_id: Number(ctx.chainId),
+          chain_id: 9889,
           block_number: Number(ctx.transaction?.blockNumber) || 0,
-          log_index: 0,
+          log_index: log.receiptIndex,
           transaction_hash: ctx.transaction?.id,
           transaction_from_address: address,
           from_address: ctx.transaction?.sender,
@@ -572,497 +615,564 @@ DieselAmmContractProcessor.bind({
       }
 
       // UPDATE POOL DATA
-      const pool = await ctx.store.get(Pool, poolId);
 
-      if (!pool) {
-        throw new Error("Pool not found");
-      }
+      // upadte pool reserves
+      pool0.reserve_0 = BigInt(
+        new BN(pool0.reserve_0.toString()).sub(log.data.asset_0_out).toString()
+      );
+      pool0.reserve_1 = BigInt(
+        new BN(pool0.reserve_1.toString()).sub(log.data.asset_1_out).toString()
+      );
+      pool1.reserve_0 = BigInt(
+        new BN(pool1.reserve_0.toString()).sub(log.data.asset_0_out).toString()
+      );
+      pool1.reserve_1 = BigInt(
+        new BN(pool1.reserve_1.toString()).sub(log.data.asset_1_out).toString()
+      );
 
-      pool.reserve_0 += asset_0_out;
-      pool.reserve_1 += asset_1_out;
-
-      pool.lp_token_address = log.data.liquidity.id.bits;
-      pool.lp_token_symbol = `${tokenConfig[pool.asset_0!].symbol}-${
-        tokenConfig[pool.asset_1!].symbol
+      // update lp token address
+      pool0.lp_token_address = log.data.liquidity.id.bits;
+      pool0.lp_token_symbol = `${tokenConfig[pool0.asset_0!].symbol}-${
+        tokenConfig[pool0.asset_1!].symbol
       } LP`;
 
-      if (Number(pool.token_index) === 0) {
-        pool.token_amount = Number(pool.reserve_0);
-        if (pool.asset_0 === ETH_ID) {
-          pool.token_amount_usd =
-            (Number(pool.reserve_0) / 10 ** pool.decimals_0!) * eth_usd;
-        } else if (pool.asset_0 === USDC_ID) {
-          pool.token_amount_usd =
-            (Number(pool.reserve_0) / 10 ** pool.decimals_0!) * usdc_usd;
+      pool1.lp_token_address = log.data.liquidity.id.bits;
+      pool1.lp_token_symbol = `${tokenConfig[pool1.asset_0!].symbol}-${
+        tokenConfig[pool1.asset_1!].symbol
+      } LP`;
+
+      // update token amount
+      pool1.token_amount = Number(pool1.reserve_1) / 10 ** pool1.decimals_1!;
+      pool0.token_amount = Number(pool0.reserve_0) / 10 ** pool0.decimals_0!;
+
+      // set token amount usd
+      if (pool0.token_address === ETH_ID || pool1.token_address === ETH_ID) {
+        if (pool1.token_address === ETH_ID) {
+          pool1.token_amount_usd = pool1.token_amount * eth_usd;
+
+          pool0.token_amount_usd = pool1.token_amount_usd;
+        } else {
+          pool0.token_amount_usd = pool0.token_amount * eth_usd;
+
+          pool1.token_amount_usd = pool0.token_amount_usd;
         }
-      } else {
-        pool.token_amount = Number(pool.reserve_1);
-        if (pool.asset_1 === ETH_ID) {
-          pool.token_amount_usd =
-            (Number(pool.reserve_1) / 10 ** pool.decimals_1!) * eth_usd;
-        } else if (pool.asset_1 === USDC_ID) {
-          pool.token_amount_usd =
-            (Number(pool.reserve_1) / 10 ** pool.decimals_1!) * usdc_usd;
+      } else if (
+        pool0.token_address === USDC_ID ||
+        pool1.token_address === USDC_ID
+      ) {
+        if (pool1.token_address === USDC_ID) {
+          pool1.token_amount_usd = pool1.token_amount * usdc_usd;
+
+          pool0.token_amount_usd = pool1.token_amount_usd;
+        } else {
+          pool0.token_amount_usd = pool0.token_amount * usdc_usd;
+
+          pool1.token_amount_usd = pool0.token_amount_usd;
+        }
+      } else if (
+        pool0.token_address === FUEL_ID ||
+        pool1.token_address === FUEL_ID
+      ) {
+        if (pool1.token_address === FUEL_ID) {
+          pool1.token_amount_usd = pool1.token_amount * fuel_usd;
+
+          pool0.token_amount_usd = pool1.token_amount_usd;
+        } else {
+          pool0.token_amount_usd = pool0.token_amount * fuel_usd;
+
+          pool1.token_amount_usd = pool0.token_amount_usd;
         }
       }
 
-      await ctx.store.upsert(pool);
+      pool0.tvl_usd = pool0.token_amount_usd! * 2;
+      pool0.tvl = pool0.reserve_0 + pool0.reserve_1;
+      await ctx.store.upsert(pool0);
+
+      pool1.tvl_usd = pool1.token_amount_usd! * 2;
+      pool1.tvl = pool1.reserve_0 + pool1.reserve_1;
+      await ctx.store.upsert(pool1);
 
       // UPDATE LP POSITION
 
-      const positionId = getHash(`${address}-${poolIdToStr(log.data.pool_id)}`);
-      console.log("PositionID ", positionId);
+      const positionId0 = getHash(
+        `${address}-${poolIdToStr(log.data.pool_id)}`
+      );
+      const positionId1 = getHash(
+        `${address}-${getHash(poolIdToStr(log.data.pool_id))}`
+      );
 
-      let position = await ctx.store.get(LPPosition, positionId);
-      let token_amount = 0;
-      let token_amount_usd = 0;
+      let position0 = await ctx.store.get(LPPosition, positionId0);
+      let position1 = await ctx.store.get(LPPosition, positionId1);
 
-      const price_usd =
-        (await getPriceBySymbol(pool.token_symbol, new Date())) || 0;
-      console.log("price", pool.token_symbol, " ", price_usd);
+      let token_amount0 = Number(asset_0_out) / 10 ** pool0.decimals_0!;
+      let token_amount1 = Number(asset_1_out) / 10 ** pool1.decimals_1!;
 
-      if (Number(pool.token_index) === 0) {
-        token_amount = Number(asset_0_out) / 10 ** pool.decimals_0!;
-        token_amount_usd = token_amount * price_usd;
-      } else {
-        token_amount = Number(asset_1_out) / 10 ** pool.decimals_1!;
-        token_amount_usd = token_amount * price_usd;
-      }
+      const liquidity = await ctx.store.get(
+        Diesel_TotalSupplyEvent,
+        log.data.liquidity.id.bits
+      );
 
-      if (!position) {
-        const newPosition = new LPPosition({
-          id: positionId,
-          pool_address: poolIdToStr(log.data.pool_id),
+      // const ratio =
+      //   Number(log.data.liquidity.amount.toString()) /
+      //   Number(liquidity!.supply);
+
+      if (!position0) {
+        // const ratio = token_amount0 / Number(pool0.token_amount);
+
+        const ratio =
+          Number(log.data.liquidity.amount.toString()) /
+          Number(liquidity!.supply);
+
+        let token_amount_usd = Number(ratio * pool0.token_amount_usd!);
+
+        const newPosition0 = new LPPosition({
+          id: positionId0,
+          pool_address: log.data.liquidity.id.bits,
           user_address: address,
-          token_index: pool.token_index,
-          token_address: pool.token_address,
-          token_symbol: pool.token_symbol,
-          token_amount: token_amount,
+          token_index: pool0.token_index,
+          token_address: pool0.token_address,
+          token_symbol: pool0.token_symbol,
+          token_amount: token_amount0,
           token_amount_usd: token_amount_usd,
+          ratio: ratio,
+          pool_token_amount: pool0.token_amount_usd,
+          liquidity_token_amount: Number(log.data.liquidity.amount.toString()),
         });
 
-        await ctx.store.upsert(newPosition);
+        await ctx.store.upsert(newPosition0);
       } else {
-        position!.token_amount! -= token_amount;
-        position!.token_amount_usd! -= token_amount_usd;
-        await ctx.store.upsert(position!);
-      }
-
-      // STORE POOL SNAPSHOT
-
-      const { dailySnapshot, hourlySnapshot } = formatTimestamp(ctx.timestamp);
-      const dailySnapshotId = getHash(`${log.data.pool_id}_${dailySnapshot}`);
-      const hourlySnapshotId = getHash(`${log.data.pool_id}_${hourlySnapshot}`);
-
-      // STORE POOL SNAPSHOT DAILY
-      const snapshotDaily = await ctx.store.get(PoolSnapshot, dailySnapshot);
-
-      if (!snapshotDaily) {
-        const newSnapDaily = new PoolSnapshot({
-          id: dailySnapshotId,
-          chain_id: 1,
-          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          pool_address: poolIdToStr(log.data.pool_id),
-          block_date: dailySnapshot,
-          token_index: pool.token_index,
-          token_address: pool.token_address,
-          token_symbol: pool.token_symbol,
-          token_amount: pool.token_amount,
-          token_amount_usd: pool.token_amount_usd,
-          volume_amount: pool.volume_amount,
-          volume_usd: pool.volume_usd,
-          fee_rate: pool.fee_rate,
-          total_fees_usd: pool.total_fees_usd,
-          user_fees_usd: pool.total_fees_usd,
-          protocol_fees_usd: 0,
-        });
-
-        await ctx.store.upsert(newSnapDaily);
-      } else {
-        snapshotDaily.timestamp = Math.floor(
-          new Date(ctx.timestamp).getTime() / 1000
+        position0.token_amount! = position0.token_amount! - token_amount0;
+        position0.liquidity_token_amount! -= Number(
+          log.data.liquidity.amount.toString()
         );
-        snapshotDaily.block_date = dailySnapshot;
-        snapshotDaily.token_amount = pool.token_amount;
-        snapshotDaily.token_amount_usd = pool.token_amount_usd;
-        snapshotDaily.volume_amount = pool.volume_amount;
-        snapshotDaily.volume_usd = pool.volume_usd;
-        snapshotDaily.total_fees_usd = pool.total_fees_usd;
-        snapshotDaily.user_fees_usd = pool.total_fees_usd;
 
-        await ctx.store.upsert(snapshotDaily);
+        const ratio =
+          position0.liquidity_token_amount! / Number(liquidity!.supply);
+
+        // const ratio =
+        //   Number(position0.token_amount!) / Number(pool0.token_amount);
+
+        let token_amount_usd = Number(ratio * pool0.token_amount_usd!);
+
+        position0.token_amount_usd! = token_amount_usd;
+
+        position0.tvl_usd! = token_amount_usd;
+        position0.token_amount_usd = token_amount_usd;
+        position0.ratio = ratio;
+        position0.pool_token_amount = pool0.token_amount_usd;
+
+        await ctx.store.upsert(position0);
       }
 
-      // STORE POOL SNAPSHOT Hourly
-      const snapshotHourly = await ctx.store.get(
-        PoolSnapshot,
-        hourlySnapshotId
-      );
+      if (!position1) {
+        // const ratio = token_amount1 / Number(pool1.token_amount);
+        const ratio =
+          Number(log.data.liquidity.amount.toString()) /
+          Number(liquidity!.supply);
 
-      if (!snapshotHourly) {
-        const newSnapHourly = new PoolSnapshot({
-          id: hourlySnapshotId,
-          chain_id: 1,
-          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          pool_address: poolIdToStr(log.data.pool_id),
-          block_date: hourlySnapshot,
-          token_index: pool.token_index,
-          token_address: pool.token_address,
-          token_symbol: pool.token_symbol,
-          token_amount: pool.token_amount,
-          token_amount_usd: pool.token_amount_usd,
-          volume_amount: pool.volume_amount,
-          volume_usd: pool.volume_usd,
-          fee_rate: pool.fee_rate,
-          total_fees_usd: pool.total_fees_usd,
-          user_fees_usd: pool.total_fees_usd,
-          protocol_fees_usd: 0,
-        });
+        let token_amount_usd = Number(ratio * pool0.token_amount_usd!);
 
-        await ctx.store.upsert(newSnapHourly);
-      } else {
-        snapshotHourly.timestamp = Math.floor(
-          new Date(ctx.timestamp).getTime() / 1000
-        );
-        snapshotHourly.block_date = hourlySnapshot;
-        snapshotHourly.token_amount = pool.token_amount;
-        snapshotHourly.token_amount_usd = pool.token_amount_usd;
-        snapshotHourly.volume_amount = pool.volume_amount;
-        snapshotHourly.volume_usd = pool.volume_usd;
-        snapshotHourly.total_fees_usd = pool.total_fees_usd;
-        snapshotHourly.user_fees_usd = pool.total_fees_usd;
-
-        await ctx.store.upsert(snapshotHourly);
-      }
-
-      // STORE LP SNAPSHOT
-
-      const dailySnapshotIdLP = getHash(
-        `${log.data.liquidity.id}_${dailySnapshot}`
-      );
-      const hourlySnapshotIdLP = getHash(
-        `${log.data.liquidity.id}_${hourlySnapshot}`
-      );
-
-      // STORE LP SNAPSHOT DAILY
-      const snapshotDailyLP = await ctx.store.get(
-        LPPositionSnapshot,
-        dailySnapshotIdLP
-      );
-
-      if (!snapshotDailyLP) {
-        const newSnapDaily = new LPPositionSnapshot({
-          id: dailySnapshotIdLP,
-          chain_id: 1,
-          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          pool_address: poolIdToStr(log.data.pool_id),
+        const newPosition1 = new LPPosition({
+          id: positionId1,
+          pool_address: log.data.liquidity.id.bits,
           user_address: address,
-          block_date: dailySnapshot,
-          token_index: pool.token_index,
-          token_address: pool.token_address,
-          token_symbol: pool.token_symbol,
-          token_amount: pool.token_amount,
-          token_amount_usd: pool.token_amount_usd,
+          token_index: pool1.token_index,
+          token_address: pool1.token_address,
+          token_symbol: pool1.token_symbol,
+          token_amount: token_amount1,
+          token_amount_usd: token_amount_usd,
+          ratio: ratio,
+          pool_token_amount: pool1.token_amount_usd,
+          liquidity_token_amount: Number(log.data.liquidity.amount.toString()),
         });
 
-        await ctx.store.upsert(newSnapDaily);
+        await ctx.store.upsert(newPosition1);
       } else {
-        snapshotDailyLP.timestamp = Math.floor(
-          new Date(ctx.timestamp).getTime() / 1000
+        position1.token_amount! = position1.token_amount! - token_amount1;
+        position1.liquidity_token_amount! -= Number(
+          log.data.liquidity.amount.toString()
         );
-        snapshotDailyLP.block_date = dailySnapshot;
-        snapshotDailyLP.token_amount = pool.token_amount;
-        snapshotDailyLP.token_amount_usd = pool.token_amount_usd;
 
-        await ctx.store.upsert(snapshotDailyLP);
+        const ratio =
+          position1.liquidity_token_amount! / Number(liquidity!.supply);
+
+        // const ratio =
+        //   Number(position1.token_amount!) / Number(pool1.token_amount);
+
+        let token_amount_usd = Number(ratio * pool0.token_amount_usd!);
+
+        position1.token_amount_usd! = token_amount_usd;
+
+        position1.tvl_usd! = token_amount_usd;
+        position1.token_amount_usd = token_amount_usd;
+        position1.ratio = ratio;
+        position1.pool_token_amount = pool1.token_amount;
+
+        await ctx.store.upsert(position1);
       }
 
-      // STORE LP SNAPSHOT Hourly
-      const snapshotHourlyLP = await ctx.store.get(
-        LPPositionSnapshot,
-        hourlySnapshotIdLP
+      // update all lp positions
+      const positions = ctx.store.listIterator(LPPosition, [
+        { field: "pool_address", op: "=", value: log.data.liquidity.id.bits },
+      ]);
+
+      for await (const position of positions) {
+        const ratio =
+          Number(position!.token_amount!.toString()) /
+          Number(liquidity!.supply);
+        await updatePositionAmount(pool0, pool1, position, ratio, ctx);
+      }
+
+      // STORE LIQUIDITY TRANSACTION EVENT
+      const eventData = {
+        token_address: "",
+        token_index: 0,
+        token_amount: 0,
+        token_amount_usd: 0,
+      };
+
+      if (asset_0_id === ETH_ID || asset_1_id === ETH_ID) {
+        eventData.token_address = ETH_ID;
+        if (asset_0_id === ETH_ID) {
+          eventData.token_index = 0;
+          eventData.token_amount =
+            Number(asset_0_out) / 10 ** pool0.decimals_0!;
+          eventData.token_amount_usd =
+            (Number(asset_0_out) / 10 ** pool0.decimals_0!) * eth_usd;
+        } else {
+          eventData.token_index = 1;
+          eventData.token_amount =
+            Number(asset_1_out) / 10 ** pool0.decimals_1!;
+          eventData.token_amount_usd =
+            (Number(asset_1_out) / 10 ** pool0.decimals_1!) * eth_usd;
+        }
+      } else if (asset_0_id === USDC_ID || asset_1_id === USDC_ID) {
+        eventData.token_address = USDC_ID;
+        if (asset_0_id === USDC_ID) {
+          eventData.token_index = 0;
+          eventData.token_amount =
+            Number(asset_0_out) / 10 ** pool0.decimals_0!;
+          eventData.token_amount_usd =
+            (Number(asset_0_out) / 10 ** pool0.decimals_0!) * usdc_usd;
+        } else {
+          eventData.token_index = 1;
+          eventData.token_amount =
+            Number(asset_1_out) / 10 ** pool0.decimals_1!;
+          eventData.token_amount_usd =
+            (Number(asset_1_out) / 10 ** pool0.decimals_1!) * usdc_usd;
+        }
+      } else {
+        return;
+      }
+
+      const liqTransId = getHash(
+        `${ctx.transaction?.id}_${address}_${Math.floor(
+          new Date(ctx.timestamp).getTime() / 1000
+        )}`
       );
 
-      if (!snapshotHourlyLP) {
-        const newSnapHourly = new LPPositionSnapshot({
-          id: hourlySnapshotIdLP,
-          chain_id: 1,
-          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          pool_address: poolIdToStr(log.data.pool_id),
-          user_address: address,
-          block_date: hourlySnapshot,
-          token_index: pool.token_index,
-          token_address: pool.token_address,
-          token_symbol: pool.token_symbol,
-          token_amount: pool.token_amount,
-          token_amount_usd: pool.token_amount_usd,
-        });
+      const newLiqTransaction = new LiquidityTransactionEvent({
+        id: liqTransId,
+        timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
+        chain_id: 9889,
+        block_number: Number(ctx.transaction?.blockNumber),
+        log_index: log.receiptIndex,
+        transaction_hash: ctx.transaction?.id,
+        user_address: address,
+        taker_address: log.data.recipient.Address?.bits,
+        pool_address: poolId,
+        token_address: eventData.token_address,
+        token_index: eventData.token_index,
+        token_amount: eventData.token_amount,
+        token_amount_usd: eventData.token_amount_usd,
+        event_type: "withdrawal",
+      });
 
-        await ctx.store.upsert(newSnapHourly);
-      } else {
-        snapshotHourlyLP.timestamp = Math.floor(
-          new Date(ctx.timestamp).getTime() / 1000
-        );
-        snapshotHourlyLP.block_date = hourlySnapshot;
-        snapshotHourlyLP.token_amount = pool.token_amount;
-        snapshotHourlyLP.token_amount_usd = pool.token_amount_usd;
-
-        await ctx.store.upsert(snapshotHourlyLP);
-      }
-
-      // STORE USER SCORE SNAPSHOT
-      let positionUser = await ctx.store.get(LPPosition, positionId);
-
-      const dailySnapshotIdUser = getHash(`${address}_${dailySnapshot}`);
-      const hourlySnapshotIdUser = getHash(`${address}_${hourlySnapshot}`);
-
-      // STORE USER SCORE SNAPSHOT DAILY
-      const snapshotDailyUser = await ctx.store.get(
-        UserScoreSnapshot,
-        dailySnapshotIdUser
-      );
-
-      if (!snapshotDailyUser) {
-        const newSnapDaily = new UserScoreSnapshot({
-          id: dailySnapshotIdUser,
-          chain_id: 1,
-          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          pool_address: poolIdToStr(log.data.pool_id),
-          user_address: address,
-          block_date: dailySnapshot,
-          block_number: Number(ctx.transaction?.blockNumber),
-          total_value_locked_score: positionUser?.token_amount_usd!,
-        });
-
-        await ctx.store.upsert(newSnapDaily);
-      } else {
-        snapshotDailyUser.timestamp = Math.floor(
-          new Date(ctx.timestamp).getTime() / 1000
-        );
-        snapshotDailyUser.block_date = dailySnapshot;
-        snapshotDailyUser.total_value_locked_score =
-          positionUser?.token_amount_usd!;
-
-        await ctx.store.upsert(snapshotDailyUser);
-      }
-
-      // STORE USER SCORE SNAPSHOT Hourly
-      const snapshotHourlyUser = await ctx.store.get(
-        UserScoreSnapshot,
-        hourlySnapshotIdUser
-      );
-
-      if (!snapshotHourlyUser) {
-        const newSnapHourly = new UserScoreSnapshot({
-          id: hourlySnapshotIdUser,
-          chain_id: 1,
-          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-          pool_address: poolIdToStr(log.data.pool_id),
-          user_address: address,
-          block_date: hourlySnapshot,
-          block_number: Number(ctx.transaction?.blockNumber),
-          total_value_locked_score: positionUser?.token_amount_usd!,
-        });
-
-        await ctx.store.upsert(newSnapHourly);
-      } else {
-        snapshotHourlyUser.timestamp = Math.floor(
-          new Date(ctx.timestamp).getTime() / 1000
-        );
-        snapshotHourlyUser.block_date = hourlySnapshot;
-        snapshotHourlyUser.total_value_locked_score =
-          positionUser?.token_amount_usd!;
-
-        await ctx.store.upsert(snapshotHourlyUser);
-      }
+      await ctx.store.upsert(newLiqTransaction);
     } catch (error) {
       console.log("BURN EVENT Error", error);
     }
   })
-  .onLogSwapEvent(
-    async (
-      log: FuelLog<SwapEventOutput>,
-      ctx: FuelContractContext<DieselAmmContract>
-    ) => {
-      try {
-        const asset_0_in = BigInt(log.data.asset_0_in.toString());
-        const asset_1_in = BigInt(log.data.asset_1_in.toString());
-        const asset_0_out = BigInt(log.data.asset_0_out.toString());
-        const asset_1_out = BigInt(log.data.asset_1_out.toString());
-        const asset0Id = log.data.pool_id[0].bits;
-        const asset1Id = log.data.pool_id[1].bits;
-        const eth_usd = (await getPriceBySymbol("ETH", new Date())) || 3196;
-        const usdc_usd = (await getPriceBySymbol("USDC", new Date())) || 1;
-        let vol = 0;
-        let fees = 0;
+  .onLogSwapEvent(async (log, ctx) => {
+    try {
+      const asset_0_in = BigInt(log.data.asset_0_in.toString());
+      const asset_1_in = BigInt(log.data.asset_1_in.toString());
+      const asset_0_out = BigInt(log.data.asset_0_out.toString());
+      const asset_1_out = BigInt(log.data.asset_1_out.toString());
+      const asset0Id = log.data.pool_id[0].bits;
+      const asset1Id = log.data.pool_id[1].bits;
+      const eth_usd = (await getPriceBySymbol("ETH", new Date())) || 3196;
+      const usdc_usd = (await getPriceBySymbol("USDC", new Date())) || 1;
+      const fuel_usd = (await getPriceBySymbol("FUEL", new Date())) || 0.017;
+      let vol = 0;
+      let fees = 0;
 
-        const poolId = poolIdToStr(log.data.pool_id);
+      const poolId = poolIdToStr(log.data.pool_id);
 
-        // UPDATE POOL DATA
-        const pool = await ctx.store.get(Pool, poolId);
+      // UPDATE POOL DATA
+      const is_buy = Number(log.data.asset_1_in) > 0;
+      const is_sell = Number(log.data.asset_1_out) > 0;
 
-        if (!pool) {
-          throw new Error("Pool not found");
-        }
+      const pool0 = await ctx.store.get(Pool, poolId);
+      const pool1 = await ctx.store.get(Pool, getHash(poolId));
 
-        pool.reserve_0 += asset_0_in - asset_0_out;
-        pool.reserve_1 += asset_1_in - asset_1_out;
-
-        if (Number(pool.token_index) === 0) {
-          pool.token_amount = Number(pool.reserve_0);
-          if (pool.asset_0 === ETH_ID) {
-            pool.token_amount_usd =
-              (Number(pool.reserve_0) / 10 ** pool.decimals_0!) * eth_usd;
-          } else if (pool.asset_0 === USDC_ID) {
-            pool.token_amount_usd =
-              (Number(pool.reserve_0) / 10 ** pool.decimals_0!) * usdc_usd;
-          }
-        } else {
-          pool.token_amount = Number(pool.reserve_1);
-          if (pool.asset_1 === ETH_ID) {
-            pool.token_amount_usd =
-              (Number(pool.reserve_1) / 10 ** pool.decimals_1!) * eth_usd;
-          } else if (pool.asset_1 === USDC_ID) {
-            pool.token_amount_usd =
-              (Number(pool.reserve_1) / 10 ** pool.decimals_1!) * usdc_usd;
-          }
-        }
-
-        let vol_usd = 0;
-
-        if (Number(asset_0_in) > 0) {
-          vol =
-            Number(asset_0_in) / 10 ** pool.decimals_0! +
-            Number(asset_1_out) / 10 ** pool.decimals_1!;
-
-          fees =
-            Number(calculateFee(pool?.is_stable!, BigInt(asset_0_in))) /
-            10 ** pool.decimals_0!;
-
-          if (asset0Id === ETH_ID) {
-            fees = fees * eth_usd;
-          } else if (asset0Id === USDC_ID) fees = fees * usdc_usd;
-        } else if (Number(asset_1_in) > 0) {
-          vol =
-            Number(asset_1_in) / 10 ** pool.decimals_1! +
-            Number(asset_0_out) / 10 ** pool.decimals_0!;
-
-          fees =
-            Number(calculateFee(pool?.is_stable!, BigInt(asset_1_in))) /
-            10 ** pool.decimals_1!;
-
-          if (asset1Id === ETH_ID) {
-            fees = fees * eth_usd;
-          } else if (asset1Id === USDC_ID) fees = fees * usdc_usd;
-        }
-
-        if (pool.asset_0 === ETH_ID || pool.asset_1 === ETH_ID) {
-          vol_usd = vol * eth_usd;
-        } else if (pool.asset_0 === USDC_ID || pool.asset_1 === USDC_ID) {
-          vol_usd = vol * usdc_usd;
-        }
-
-        pool.total_fees_usd! += fees;
-        pool.volume_amount += vol;
-        pool.volume_usd! += vol_usd;
-
-        await ctx.store.upsert(pool);
-
-        // STORE POOL SNAPSHOT
-
-        const { dailySnapshot, hourlySnapshot } = formatTimestamp(
-          ctx.timestamp
-        );
-        const dailySnapshotId = getHash(`${log.data.pool_id}_${dailySnapshot}`);
-        const hourlySnapshotId = getHash(
-          `${log.data.pool_id}_${hourlySnapshot}`
-        );
-
-        // STORE POOL SNAPSHOT DAILY
-        const snapshotDaily = await ctx.store.get(PoolSnapshot, dailySnapshot);
-
-        if (!snapshotDaily) {
-          const newSnapDaily = new PoolSnapshot({
-            id: dailySnapshotId,
-            chain_id: 1,
-            timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-            pool_address: poolIdToStr(log.data.pool_id),
-            block_date: dailySnapshot,
-            token_index: pool.token_index,
-            token_address: pool.token_address,
-            token_symbol: pool.token_symbol,
-            token_amount: pool.token_amount,
-            token_amount_usd: pool.token_amount_usd,
-            volume_amount: pool.volume_amount,
-            volume_usd: pool.volume_usd,
-            fee_rate: pool.fee_rate,
-            total_fees_usd: pool.total_fees_usd,
-            user_fees_usd: pool.total_fees_usd,
-            protocol_fees_usd: 0,
-          });
-
-          await ctx.store.upsert(newSnapDaily);
-        } else {
-          snapshotDaily.timestamp = Math.floor(
-            new Date(ctx.timestamp).getTime() / 1000
-          );
-          snapshotDaily.block_date = dailySnapshot;
-          snapshotDaily.token_amount = pool.token_amount;
-          snapshotDaily.token_amount_usd = pool.token_amount_usd;
-          snapshotDaily.volume_amount = pool.volume_amount;
-          snapshotDaily.volume_usd = pool.volume_usd;
-          snapshotDaily.total_fees_usd = pool.total_fees_usd;
-          snapshotDaily.user_fees_usd = pool.total_fees_usd;
-
-          await ctx.store.upsert(snapshotDaily);
-        }
-
-        // STORE POOL SNAPSHOT Hourly
-        const snapshotHourly = await ctx.store.get(
-          PoolSnapshot,
-          hourlySnapshotId
-        );
-
-        if (!snapshotHourly) {
-          const newSnapHourly = new PoolSnapshot({
-            id: hourlySnapshotId,
-            chain_id: 1,
-            timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-            pool_address: poolIdToStr(log.data.pool_id),
-            block_date: hourlySnapshot,
-            token_index: pool.token_index,
-            token_address: pool.token_address,
-            token_symbol: pool.token_symbol,
-            token_amount: pool.token_amount,
-            token_amount_usd: pool.token_amount_usd,
-            volume_amount: pool.volume_amount,
-            volume_usd: pool.volume_usd,
-            fee_rate: pool.fee_rate,
-            total_fees_usd: pool.total_fees_usd,
-            user_fees_usd: pool.total_fees_usd,
-            protocol_fees_usd: 0,
-          });
-
-          await ctx.store.upsert(newSnapHourly);
-        } else {
-          snapshotHourly.timestamp = Math.floor(
-            new Date(ctx.timestamp).getTime() / 1000
-          );
-          snapshotHourly.block_date = hourlySnapshot;
-          snapshotHourly.token_amount = pool.token_amount;
-          snapshotHourly.token_amount_usd = pool.token_amount_usd;
-          snapshotHourly.volume_amount = pool.volume_amount;
-          snapshotHourly.volume_usd = pool.volume_usd;
-          snapshotHourly.total_fees_usd = pool.total_fees_usd;
-          snapshotHourly.user_fees_usd = pool.total_fees_usd;
-
-          await ctx.store.upsert(snapshotHourly);
-        }
-      } catch (error) {
-        console.log("SWAP EVENT ERROR", error);
+      if (!pool0 || !pool1) {
+        throw new Error("Pool not found");
       }
+
+      pool0.reserve_0 = pool0.reserve_0 + (asset_0_in - asset_0_out);
+      pool0.reserve_1 = pool0.reserve_1 + (asset_1_in - asset_1_out);
+
+      pool1.reserve_0 = pool1.reserve_0 + (asset_0_in - asset_0_out);
+      pool1.reserve_1 = pool1.reserve_1 + (asset_1_in - asset_1_out);
+
+      let exchange_rate = BigInt(0);
+      try {
+        if (is_buy) {
+          exchange_rate =
+            (BigInt(asset_0_in) * BigInt(10n ** 18n)) / BigInt(asset_0_out);
+        } else {
+          exchange_rate =
+            (BigInt(asset_1_out) * BigInt(10n ** 18n)) / BigInt(asset_0_in);
+        }
+      } catch (err) {
+        console.log("ERROR EXC RATE", err);
+      }
+
+      pool0.exchange_rate = exchange_rate;
+      pool1.exchange_rate = exchange_rate;
+
+      // update token amount
+      pool1.token_amount = Number(pool1.reserve_1) / 10 ** pool1.decimals_1!;
+      pool0.token_amount = Number(pool0.reserve_0) / 10 ** pool0.decimals_0!;
+
+      // set token amount usd
+      if (pool0.token_address === ETH_ID || pool1.token_address === ETH_ID) {
+        if (pool1.token_address === ETH_ID) {
+          pool1.token_amount_usd = pool1.token_amount * eth_usd;
+
+          pool0.token_amount_usd = pool1.token_amount_usd;
+        } else {
+          pool0.token_amount_usd = pool0.token_amount * eth_usd;
+
+          pool1.token_amount_usd = pool0.token_amount_usd;
+        }
+      } else if (
+        pool0.token_address === USDC_ID ||
+        pool1.token_address === USDC_ID
+      ) {
+        if (pool1.token_address === USDC_ID) {
+          pool1.token_amount_usd = pool1.token_amount * usdc_usd;
+
+          pool0.token_amount_usd = pool1.token_amount_usd;
+        } else {
+          pool0.token_amount_usd = pool0.token_amount * usdc_usd;
+
+          pool1.token_amount_usd = pool0.token_amount_usd;
+        }
+      } else if (
+        pool0.token_address === FUEL_ID ||
+        pool1.token_address === FUEL_ID
+      ) {
+        if (pool1.token_address === FUEL_ID) {
+          pool1.token_amount_usd = pool1.token_amount * fuel_usd;
+
+          pool0.token_amount_usd = pool1.token_amount_usd;
+        } else {
+          pool0.token_amount_usd = pool0.token_amount * fuel_usd;
+
+          pool1.token_amount_usd = pool0.token_amount_usd;
+        }
+      }
+
+      // calculate fees and volume
+      let vol_usd = 0;
+      let swap_amount_usd = 0;
+
+      if (Number(asset_0_in) > 0) {
+        vol = Number(asset_0_in) / 1e18 + Number(asset_1_out) / 1e18;
+
+        fees =
+          Number(calculateFee(pool0?.is_stable!, BigInt(asset_0_in))) / 1e18;
+
+        swap_amount_usd =
+          Number(asset_0_in) / 1e18 + Number(asset_1_out) / 1e18;
+
+        if (asset0Id === ETH_ID) {
+          fees = fees * eth_usd;
+          swap_amount_usd = swap_amount_usd * eth_usd;
+        } else if (asset0Id === USDC_ID) {
+          fees = fees * usdc_usd;
+          swap_amount_usd = swap_amount_usd * usdc_usd;
+        }
+      } else if (Number(asset_1_in) > 0) {
+        vol = Number(asset_1_in) / 1e18 + Number(asset_0_out) / 1e18;
+
+        fees =
+          Number(calculateFee(pool0?.is_stable!, BigInt(asset_1_in))) / 1e18;
+
+        swap_amount_usd =
+          Number(asset_1_in) / 1e18 + Number(asset_0_out) / 1e18;
+
+        if (asset1Id === ETH_ID) {
+          fees = fees * eth_usd;
+          swap_amount_usd = swap_amount_usd * eth_usd;
+        } else if (asset1Id === USDC_ID) {
+          fees = fees * usdc_usd;
+          swap_amount_usd = swap_amount_usd * usdc_usd;
+        }
+      }
+
+      if (pool0.asset_0 === ETH_ID || pool0.asset_1 === ETH_ID) {
+        vol_usd = vol * eth_usd;
+      } else if (pool0.asset_0 === USDC_ID || pool0.asset_1 === USDC_ID) {
+        vol_usd = vol * usdc_usd;
+      }
+
+      pool0.total_fees_usd! += fees;
+      pool0.volume_amount += vol;
+      pool0.volume_usd! += vol_usd;
+
+      pool0.tvl_usd = pool0.token_amount_usd! * 2;
+      pool0.tvl = pool0.reserve_0 + pool0.reserve_1;
+
+      if (Number(asset_0_in) > 0) {
+        vol = Number(asset_0_in) / 1e18 + Number(asset_1_out) / 1e18;
+
+        fees =
+          Number(calculateFee(pool1?.is_stable!, BigInt(asset_0_in))) / 1e18;
+
+        swap_amount_usd =
+          Number(asset_0_in) / 1e18 + Number(asset_1_out) / 1e18;
+
+        if (asset0Id === ETH_ID) {
+          fees = fees * eth_usd;
+          swap_amount_usd = swap_amount_usd * eth_usd;
+        } else if (asset0Id === USDC_ID) {
+          fees = fees * usdc_usd;
+          swap_amount_usd = swap_amount_usd * usdc_usd;
+        }
+      } else if (Number(asset_1_in) > 0) {
+        vol = Number(asset_1_in) / 1e18 + Number(asset_0_out) / 1e18;
+
+        fees =
+          Number(calculateFee(pool1?.is_stable!, BigInt(asset_1_in))) / 1e18;
+
+        swap_amount_usd =
+          Number(asset_1_in) / 1e18 + Number(asset_0_out) / 1e18;
+
+        if (asset1Id === ETH_ID) {
+          fees = fees * eth_usd;
+          swap_amount_usd = swap_amount_usd * eth_usd;
+        } else if (asset1Id === USDC_ID) {
+          fees = fees * usdc_usd;
+          swap_amount_usd = swap_amount_usd * usdc_usd;
+        }
+      }
+
+      if (pool1.asset_0 === ETH_ID || pool1.asset_1 === ETH_ID) {
+        vol_usd = vol * eth_usd;
+      } else if (pool1.asset_0 === USDC_ID || pool1.asset_1 === USDC_ID) {
+        vol_usd = vol * usdc_usd;
+      }
+
+      pool1.total_fees_usd! += fees;
+      pool1.volume_amount += vol;
+      pool1.volume_usd! += vol_usd;
+
+      pool1.tvl_usd = pool1.token_amount_usd! * 2;
+      pool1.tvl = pool1.reserve_0 + pool1.reserve_1;
+      await ctx.store.upsert(pool0);
+      await ctx.store.upsert(pool1);
+
+      // update all lp positions
+      const positions = ctx.store.listIterator(LPPosition, [
+        { field: "pool_address", op: "=", value: pool0.lp_token_address },
+      ]);
+
+      const liquidity = await ctx.store.get(
+        Diesel_TotalSupplyEvent,
+        pool0.lp_token_address
+      );
+
+      for await (const position of positions) {
+        const ratio =
+          position.liquidity_token_amount! / Number(liquidity!.supply);
+        await updatePositionAmount(pool0, pool1, position, ratio, ctx);
+      }
+
+      // STORE TRADES DATA
+      const tradeId = getHash(
+        `${Number(ctx.transaction?.blockNumber)}_${ctx.transaction?.id}`
+      );
+      const tradeData = {
+        input_token_address: "",
+        input_token_symbol: "",
+        input_token_amount: 0,
+        output_token_address: "",
+        output_token_symbol: "",
+        output_token_amount: 0,
+        spot_price_after_swap: 0,
+        swap_amount_usd: 0,
+        fees_usd: fees,
+      };
+
+      if (asset_0_in > 0) {
+        tradeData.input_token_address = asset0Id;
+        tradeData.input_token_symbol = tokenConfig[asset0Id].symbol;
+        tradeData.input_token_amount =
+          Number(asset_0_in) / 10 ** pool0.decimals_0!;
+        tradeData.output_token_address = asset1Id;
+        tradeData.output_token_symbol = tokenConfig[asset1Id].symbol;
+        tradeData.output_token_amount =
+          Number(asset_1_out) / 10 ** pool0.decimals_1!;
+        tradeData.spot_price_after_swap =
+          Number(pool0.reserve_0) / Number(pool0.reserve_1);
+      } else if (asset_1_in > 0) {
+        tradeData.input_token_address = asset1Id;
+        tradeData.input_token_symbol = tokenConfig[asset1Id].symbol;
+        tradeData.input_token_amount =
+          Number(asset_1_in) / 10 ** pool0.decimals_1!;
+        tradeData.output_token_address = asset0Id;
+        tradeData.output_token_symbol = tokenConfig[asset0Id].symbol;
+        tradeData.output_token_amount =
+          Number(asset_0_out) / 10 ** pool0.decimals_0!;
+        tradeData.spot_price_after_swap =
+          Number(pool0.reserve_1) / Number(pool0.reserve_0);
+      }
+
+      console.log(log.data.recipient.Address?.bits);
+      if (log.data.recipient.Address?.bits) {
+        const newTrade = new Trades({
+          id: tradeId,
+          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
+          chain_id: 9889,
+          block_number: Number(ctx.transaction?.blockNumber),
+          log_index: log.receiptIndex,
+          transaction_hash: ctx.transaction?.id,
+          user_address: log.data.recipient.Address?.bits,
+          taker_address: log.data.recipient.Address?.bits,
+          maker_address: poolId,
+          pair_name: poolIdToStr(log.data.pool_id),
+          pool_address: poolIdToStr(log.data.pool_id),
+          input_token_address: tradeData.input_token_address,
+          input_token_symbol: tradeData.input_token_symbol,
+          input_token_amount: tradeData.input_token_amount,
+          output_token_address: tradeData.output_token_address,
+          output_token_symbol: tradeData.output_token_symbol,
+          output_token_amount: tradeData.output_token_amount,
+          spot_price_after_swap: tradeData.spot_price_after_swap,
+          swap_amount_usd: swap_amount_usd,
+          fees_usd: tradeData.fees_usd,
+          sqrt_price_x96: "",
+        });
+
+        await ctx.store.upsert(newTrade);
+      }
+    } catch (error) {
+      console.log("SWAP EVENT ERROR", error);
     }
-  )
+  })
   .onTransfer({}, async (log, ctx) => {
     // STORE V2 TRANSFERS
     const transferId = getHash(
@@ -1072,7 +1182,7 @@ DieselAmmContractProcessor.bind({
     const v2Transfer = new V2Transfers({
       id: transferId,
       timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-      chain_id: Number(ctx.chainId),
+      chain_id: 9889,
       block_number: Number(ctx.transaction?.blockNumber) || 0,
       log_index: 0,
       transaction_hash: ctx.transaction?.id,
@@ -1084,434 +1194,122 @@ DieselAmmContractProcessor.bind({
     });
 
     await ctx.store.upsert(v2Transfer);
-  });
-//   .onTimeInterval(
-//     async (block: any, ctx: FuelContractContext<DieselAmmContract>) => {
-//       try {
-//         console.log("FROM TIMEREDFFDUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUU");
-//         const pool = await ctx.store.get(
-//           Pool,
-//           "0x1d5d97005e41cae2187a895fd8eab0506111e0e2f3331cd3912c15c24e3c1d82_0x286c479da40dc953bddc3bb4c453b608bba2e0ac483b077bd475174115395e6b_false"
-//         );
-//         console.log("POOL", pool);
-//         for await (const pool of ctx.store.listIterator(Pool, [])) {
-//           console.log("ITERATOR", pool.id);
-//         }
+  })
+  .onLogTotalSupplyEvent(async (log, ctx) => {
+    const supply = await ctx.store.get(
+      Diesel_TotalSupplyEvent,
+      log.data.asset.bits
+    );
 
-//         // pools.forEach(async (pool: Pool, i: any) => {
-//         //   const poolSnap = await ctx.store.get(PoolSnapshot, pool.id);
-//         //   if (!poolSnap) {
-//         //     const poolSnap = new PoolSnapshot({
-//         //       id: pool.id,
-//         //       timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-//         //       block_date: new Date(ctx.timestamp)
-//         //         .toISOString()
-//         //         .slice(0, 19)
-//         //         .replace("T", " "),
-//         //       chain_id: Number(ctx.chainId),
-//         //       pool_address: poolIdToStr(pool.id),
-//         //       token_index: 0n,
-//         //       token_address: "to be defined",
-//         //       token_symbol: "ETH",
-//         //       token_amount: 0,
-//         //       token_amount_usd: 0,
-//         //       volume_amount: pool.volume_amount,
-//         //       fee_rate: pool.fee_rate,
-//         //       total_fees_usd: pool.total_fees_usd,
-//         //       user_fees_usd: pool.total_fees_usd,
-//         //       protocol_fees_usd: 0,
-//         //     });
+    if (supply) {
+      supply.supply = BigInt(log.data.supply.toString());
+      await ctx.store.upsert(supply);
+    } else {
+      const totalSupply = new Diesel_TotalSupplyEvent({
+        id: log.data.asset.bits,
+        time: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
+        block_height: Number(ctx.transaction?.blockNumber),
+        transaction_id: ctx.transaction?.id!,
+        asset: log.data.asset.bits,
+        supply: BigInt(log.data.supply.toString()),
+        sender: log.data.sender.Address?.bits!,
+      });
+      await ctx.store.upsert(totalSupply);
+    }
+  })
+  .onTimeInterval(
+    async (block, ctx) => {
+      const pools = ctx.store.listIterator(Pool, []);
 
-//         //     await ctx.store.upsert(poolSnap);
-//         //     return;
-//         //   }
-//         //   poolSnap.id = pool.id;
-//         //   poolSnap.timestamp = Math.floor(
-//         //     new Date(ctx.timestamp).getTime() / 1000
-//         //   );
-//         //   poolSnap.block_date = new Date(ctx.timestamp)
-//         //     .toISOString()
-//         //     .slice(0, 19)
-//         //     .replace("T", " ");
-//         //   poolSnap.chain_id = Number(ctx.chainId);
-//         //   poolSnap.pool_address = poolIdToStr(pool.id);
-//         //   poolSnap.token_index = 0n;
-//         //   poolSnap.token_address = "to be defined";
-//         //   poolSnap.token_symbol = "ETH";
-//         //   poolSnap.token_amount = 0;
-//         //   poolSnap.token_amount_usd = 0;
-//         //   poolSnap.volume_amount = pool.volume_amount;
-//         //   poolSnap.fee_rate = pool.fee_rate;
-//         //   poolSnap.total_fees_usd = pool.total_fees_usd;
-//         //   poolSnap.user_fees_usd = pool.total_fees_usd;
-//         //   poolSnap.protocol_fees_usd = 0;
+      const { dailySnapshot, hourlySnapshot } = formatTimestamp(ctx.timestamp);
+      for await (const pool of pools) {
+        const dailySnapshotId = getHash(
+          `${pool.pool_address}_${Math.floor(
+            new Date(ctx.timestamp).getTime()
+          )}_${pool.token_index}`
+        );
 
-//         //   await ctx.store.upsert(poolSnap);
-//         // });
-//       } catch (error) {
-//         console.log("TIME INTERVAL ERROR", error);
-//       }
-//     },
-//     60,
-//     60
-//   );
-// // .onTimeInterval(
-// //   async (block, ctx) => {
-// //     console.log("FROM TIMEREDFFDUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUU");
-// //       const pools = await ctx.store.list(Pool)
+        const newPoolSnapDaily = new PoolSnapshot({
+          id: dailySnapshotId,
+          chain_id: 9889,
+          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
+          pool_address: pool.pool_address,
+          block_date: dailySnapshot,
+          token_index: pool.token_index,
+          token_address: pool.token_address,
+          token_symbol: pool.token_symbol,
+          token_amount: pool.token_amount,
+          token_amount_usd: pool.token_amount_usd,
+          volume_amount: pool.volume_amount,
+          volume_usd: pool.volume_usd,
+          fee_rate: pool.fee_rate,
+          total_fees_usd: pool.total_fees_usd,
+          user_fees_usd: pool.total_fees_usd,
+          protocol_fees_usd: 0,
+        });
 
-// // pools.forEach((pool, i) => {
-// //   const poolSnapshot = new PoolSnapshot({
-// //     id: pool.id,
-// //     timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-// //     block_date: new Date(ctx.timestamp).toISOString().slice(0, 19).replace('T', ' '),
-// //     chain_id: Number(ctx.chainId),
-// //     pool_address: poolIdToStr(pool.id),
-// //     token_index: 0n,
-// //     token_address: pool.lp_token_address,
+        await ctx.store.upsert(newPoolSnapDaily);
+      }
 
-// // })
+      const LPPositions = ctx.store.listIterator(LPPosition, []);
 
-// //   }}),
-// //   60,
-// //   60
-// // );
+      const userPoolTVLMap = new Map<string, number>();
 
-// // import { LogLevel } from "@sentio/sdk";
-// // import { FuelContractContext, FuelLog, FuelNetwork } from "@sentio/sdk/fuel";
+      for await (const position of LPPositions) {
+        const dailySnapshotIdLP = getHash(
+          `${position.user_address}_${position.pool_address}_${Math.floor(
+            new Date(ctx.timestamp).getTime()
+          )}_${position.token_index}`
+        );
 
-// // import { DieselAmmContractProcessor } from "./types/fuel/DieselAmmContractProcessor.js";
-// // import {
-// //   BurnEventOutput,
-// //   CreatePoolEventInput,
-// //   DieselAmmContract,
-// //   MintEventOutput,
-// //   SwapEventOutput,
-// // } from "./types/fuel/DieselAmmContract.js";
-// // import { Balance, MainPrice, Pool, PoolSnapshot } from "./schema/store.js";
-// // import {
-// //   getHash,
-// //   getPoolTvl,
-// //   identityToStr,
-// //   poolIdToStr,
-// //   updateBalance,
-// //   updateBalanceByPool,
-// // } from "./utils.js";
-// // import { BN } from "fuels";
-// // import { getPriceBySymbol } from "@sentio/sdk/utils";
-// // import axios from "axios";
+        const newPositionSnapDaily = new LPPositionSnapshot({
+          id: dailySnapshotIdLP,
+          chain_id: 9889,
+          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
+          pool_address: position.pool_address,
+          user_address: position.user_address,
+          block_date: dailySnapshot,
+          token_index: position.token_index,
+          token_address: position.token_address,
+          token_symbol: position.token_symbol,
+          token_amount: Number(position.token_amount),
+          token_amount_usd: position.token_amount_usd,
+        });
 
-// // const USDC_ID =
-// //   "0x286c479da40dc953bddc3bb4c453b608bba2e0ac483b077bd475174115395e6b";
-// // let ETH_ID =
-// //   "0xf8f8b6283d7fa5b672b530cbb84fcccb4ff8dc40f8176ef4544ddb1f1952ad07";
+        await ctx.store.upsert(newPositionSnapDaily);
 
-// // DieselAmmContractProcessor.bind({
-// //   address: "0x7c293b054938bedy41354203be4c08aec2c3466412cac803f4ad62abf22e476",
-// //   chainId: FuelNetwork.MAIN_NET,
-// // })
-// //   .onLogCreatePoolEvent(
-// //     async (
-// //       log: FuelLog<CreatePoolEventInput>,
-// //       ctx: FuelContractContext<DieselAmmContract>
-// //     ) => {
-// //       // const pool = new Pool({
-// //       //   id: poolIdToStr(log.data.pool_id),
-// //       //   asset_0: log.data.pool_id[0].bits,
-// //       //   asset_1: log.data.pool_id[1].bits,
-// //       //   is_stable: log.data.pool_id[2],
-// //       //   reserve_0: 0n,
-// //       //   reserve_1: 0n,
-// //       //   create_time: ctx.timestamp.getTime(),
-// //       //   decimals_0: Number(log.data.decimals_0),
-// //       //   decimals_1: Number(log.data.decimals_1),
-// //       // });
-// //       // BigInt(ctx.block?.height.toString()!)
+        // Track cumulative TVL per user per pool
+        const userPoolKey = `${position.user_address}_${position.pool_address}`;
+        const currentTVL = userPoolTVLMap.get(userPoolKey) || 0;
+        userPoolTVLMap.set(
+          userPoolKey,
+          currentTVL + (position.token_amount_usd || 0)
+        );
+      }
+      // Create user score snapshots after aggregating all positions
+      for (const [userPoolKey, totalTVL] of userPoolTVLMap.entries()) {
+        const [userAddress, poolAddress] = userPoolKey.split("_");
 
-// //       const pool = new Pool({
-// //         id: poolIdToStr(log.data.pool_id),
-// //         chain_id: 1,
-// //         creation_block_number: 0n,
-// //         timestamp: 0n,
-// //         pool_address: poolIdToStr(log.data.pool_id),
-// //         lp_token_address: "na",
-// //         lp_token_symbol: "na",
-// //         token_address: "na",
-// //         token_symbol: "na",
-// //         token_decimals: "na",
-// //         token_index: "na",
-// //         dex_type: "na",
+        const dailySnapshotIdUser = getHash(
+          `${userAddress}_${Math.floor(
+            new Date(ctx.timestamp).getTime()
+          )}_${poolAddress}`
+        );
 
-// //         asset_0: log.data.pool_id[0].bits,
-// //         asset_1: log.data.pool_id[1].bits,
-// //         is_stable: log.data.pool_id[2],
-// //         reserve_0: 0n,
-// //         reserve_1: 0n,
-// //         decimals_0: Number(log.data.decimals_0),
-// //         decimals_1: Number(log.data.decimals_1),
-// //       });
-// //       console.log("LOG FROM PROCESSOR--------------------");
+        const newUserSnapDaily = new UserScoreSnapshot({
+          id: dailySnapshotIdUser,
+          chain_id: 9889,
+          timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
+          pool_address: poolAddress,
+          user_address: userAddress,
+          block_date: dailySnapshot,
+          block_number: Number(ctx.transaction?.blockNumber),
+          total_value_locked_score: totalTVL,
+        });
 
-// //       await ctx.store.upsert(pool);
-// //     }
-// //   )
-// //   .onLogMintEvent(
-// //     async (
-// //       log: FuelLog<MintEventOutput>,
-// //       ctx: FuelContractContext<DieselAmmContract>
-// //     ) => {
-// //       const asset_0_in = log.data.asset_0_in;
-// //       const asset_1_in = log.data.asset_1_in;
-// //       const asset0Id = log.data.pool_id[0].bits;
-// //       const asset1Id = log.data.pool_id[1].bits;
-
-// //       const eth_usd = (await getPriceBySymbol("ETH", new Date())) || 3196;
-// //       const usdc_usd = (await getPriceBySymbol("USDC", new Date())) || 1;
-// //       const poolId = poolIdToStr(log.data.pool_id);
-
-// //       // get pool by id
-// //       const pool = await ctx.store.get(Pool, poolId);
-
-// //       if (!pool) {
-// //         throw new Error("Pool not found");
-// //       }
-
-// //       pool.reserve_0 = pool.reserve_0! + BigInt(asset_0_in.toString());
-// //       pool.reserve_1 = pool.reserve_1! + BigInt(asset_1_in.toString());
-
-// //       // if (pool.asset_0 === ETH_ID || pool.asset_1 === ETH_ID) {
-// //       //   if (pool.asset_0 === ETH_ID) {
-// //       //     const asset_0_usd = new BN(pool.reserve_0!.toString())
-// //       //       .div(10 ** pool.decimals_0!)
-// //       //       .mul(eth_usd!);
-// //       //     console.log("ASSET OOSDOSDOSDO", asset_0_usd);
-
-// //       //     const tvl_usd = asset_0_usd.mul(2);
-
-// //       //     pool.tvl_usd = Number(tvl_usd.toString());
-// //       //   } else {
-// //       //     const asset_1_usd = new BN(pool.reserve_1!.toString())
-// //       //       .div(10 ** pool.decimals_1!)
-// //       //       .mul(eth_usd!);
-// //       //     const tvl_usd = asset_1_usd.mul(2);
-// //       //     console.log(asset_1_usd);
-
-// //       //     pool.tvl_usd = Number(tvl_usd.toString());
-// //       //   }
-// //       // } else if (pool.asset_0 === USDC_ID || pool.asset_1 === USDC_ID) {
-// //       //   if (pool.asset_0 === USDC_ID) {
-// //       //     const asset_0_usd = new BN(pool.reserve_0!.toString())
-// //       //       .div(10 ** pool.decimals_0!)
-// //       //       .mul(usdc_usd!);
-// //       //     const tvl_usd = asset_0_usd.mul(2);
-// //       //     console.log(asset_0_usd);
-
-// //       //     pool.tvl_usd = Number(tvl_usd.toString());
-// //       //   } else {
-// //       //     const asset_1_usd = new BN(pool.reserve_1!.toString())
-// //       //       .div(10 ** pool.decimals_1!)
-// //       //       .mul(usdc_usd!);
-// //       //     const tvl_usd = asset_1_usd.mul(2);
-// //       //     console.log(asset_1_usd);
-
-// //       //     pool.tvl_usd = Number(tvl_usd.toString());
-// //       //   }
-// //       // }
-
-// //       const lp_token_address = log.data.liquidity.id.bits;
-// //       // const lp_token_symbol =
-// //       // const [address, isContract] = identityToStr(log.data.recipient);
-
-// //       // const balanceId = getHash(`${address}-${ctx.contractAddress}`);
-// //       // console.log(address);
-// //       // let balance = await ctx.store.get(Balance, balanceId);
-
-// //       // await updateBalanceByPool(
-// //       //   log.data.recipient.Address?.bits!,
-// //       //   poolId,
-// //       //   asset0Id,
-// //       //   asset1Id,
-// //       //   asset0In,
-// //       //   asset1In,
-// //       //   balance,
-// //       //   balanceId,
-// //       //   ctx
-// //       // );
-
-// //       await ctx.store.upsert(pool);
-// //     }
-// //   )
-// //   .onLogBurnEvent(
-// //     async (
-// //       log: FuelLog<BurnEventOutput>,
-// //       ctx: FuelContractContext<DieselAmmContract>
-// //     ) => {
-// //       const eth_usd = (await getPriceBySymbol("ETH", new Date())) || 3196;
-// //       const usdc_usd = (await getPriceBySymbol("USDC", new Date())) || 1;
-
-// //       const asset_0_out = log.data.asset_0_out.toString();
-// //       const asset_1_out = log.data.asset_1_out.toString();
-// //       const asset0Id = log.data.pool_id[0].bits;
-// //       const asset1Id = log.data.pool_id[1].bits;
-// //       const poolId = poolIdToStr(log.data.pool_id);
-
-// //       const pool = await ctx.store.get(Pool, poolId);
-
-// //       if (!pool) {
-// //         throw new Error(`Pool with ID ${poolId} not found`);
-// //       }
-
-// //       pool.reserve_0 = pool.reserve_0! - BigInt(asset_0_out.toString());
-// //       pool.reserve_1 = pool.reserve_1! - BigInt(asset_1_out.toString());
-
-// //       // if (pool.asset_0 === ETH_ID || pool.asset_1 === ETH_ID) {
-// //       //   if (pool.asset_0 === ETH_ID) {
-// //       //     const asset_0_usd = new BN(pool.reserve_0!.toString())
-// //       //       .div(10 ** pool.decimals_0!)
-// //       //       .mul(eth_usd!);
-// //       //     console.log("ASSET OOSDOSDOSDO", asset_0_usd);
-
-// //       //     const tvl_usd = asset_0_usd.mul(2);
-
-// //       //     pool.tvl_usd = Number(tvl_usd.toString());
-// //       //   } else {
-// //       //     const asset_1_usd = new BN(pool.reserve_1!.toString())
-// //       //       .div(10 ** pool.decimals_1!)
-// //       //       .mul(eth_usd!);
-// //       //     const tvl_usd = asset_1_usd.mul(2);
-// //       //     console.log(asset_1_usd);
-
-// //       //     pool.tvl_usd = Number(tvl_usd.toString());
-// //       //   }
-// //       // } else if (pool.asset_0 === USDC_ID || pool.asset_1 === USDC_ID) {
-// //       //   if (pool.asset_0 === USDC_ID) {
-// //       //     const asset_0_usd = new BN(pool.reserve_0!.toString())
-// //       //       .div(10 ** pool.decimals_0!)
-// //       //       .mul(usdc_usd!);
-// //       //     const tvl_usd = asset_0_usd.mul(2);
-// //       //     console.log(asset_0_usd);
-
-// //       //     pool.tvl_usd = Number(tvl_usd.toString());
-// //       //   } else {
-// //       //     const asset_1_usd = new BN(pool.reserve_1!.toString())
-// //       //       .div(10 ** pool.decimals_1!)
-// //       //       .mul(usdc_usd!);
-// //       //     const tvl_usd = asset_1_usd.mul(2);
-// //       //     console.log(asset_1_usd);
-
-// //       //     pool.tvl_usd = Number(tvl_usd.toString());
-// //       //   }
-// //       // }
-
-// //       // if (
-// //       //   pool.reserve_0 < BigInt(asset0out) ||
-// //       //   pool.reserve_1 < BigInt(asset1out)
-// //       // ) {
-// //       //   throw new Error(
-// //       //     `reserve0: ${pool.reserve_0} reserve1: ${pool.reserve_1} Insufficient reserves in pool ${poolId}`
-// //       //   );
-// //       // }
-
-// //       // pool.reserve_0 = pool.reserve_0 - BigInt(asset0out);
-// //       // pool.reserve_1 = pool.reserve_1 - BigInt(asset1out);
-// //       // pool.create_time = pool.create_time ?? ctx.timestamp;
-// //       // pool.lpId = log.data.liquidity.id.bits;
-
-// //       await ctx.store.upsert(pool);
-// //     }
-// //   )
-// //   .onLogSwapEvent(
-// //     async (
-// //       log: FuelLog<SwapEventOutput>,
-// //       ctx: FuelContractContext<DieselAmmContract>
-// //     ) => {
-// //       const eth_usd = (await getPriceBySymbol("ETH", new Date())) || 3196;
-// //       const usdc_usd = (await getPriceBySymbol("USDC", new Date())) || 1;
-
-// //       const asset_0_in = log.data.asset_0_in.toString();
-// //       const asset_1_in = log.data.asset_1_in.toString();
-// //       const asset_0_out = log.data.asset_0_out.toString();
-// //       const asset_1_out = log.data.asset_1_out.toString();
-// //       const asset0Id = log.data.pool_id[0].bits;
-// //       const asset1Id = log.data.pool_id[1].bits;
-// //       const poolId = poolIdToStr(log.data.pool_id);
-
-// //       const pool = await ctx.store.get(Pool, poolId);
-
-// //       if (!pool) {
-// //         throw new Error(`Pool with ID ${poolId} not found`);
-// //       }
-
-// //       pool.reserve_0 =
-// //         pool.reserve_0! + BigInt(asset_0_in) - BigInt(asset_0_out);
-// //       pool.reserve_1 =
-// //         pool.reserve_1! + BigInt(asset_1_in) - BigInt(asset_1_out);
-
-// //       // if (pool.asset_0 === ETH_ID || pool.asset_1 === ETH_ID) {
-// //       //   if (pool.asset_0 === ETH_ID) {
-// //       //     const asset_0_usd = new BN(pool.reserve_0!.toString())
-// //       //       .div(10 ** pool.decimals_0!)
-// //       //       .mul(eth_usd!);
-// //       //     console.log("ASSET OOSDOSDOSDO", asset_0_usd);
-
-// //       //     const tvl_usd = asset_0_usd.mul(2);
-
-// //       //     pool.tvl_usd = Number(tvl_usd.toString());
-// //       //   } else {
-// //       //     const asset_1_usd = new BN(pool.reserve_1!.toString())
-// //       //       .div(10 ** pool.decimals_1!)
-// //       //       .mul(eth_usd!);
-// //       //     const tvl_usd = asset_1_usd.mul(2);
-// //       //     console.log(asset_1_usd);
-
-// //       //     pool.tvl_usd = Number(tvl_usd.toString());
-// //       //   }
-// //       // } else if (pool.asset_0 === USDC_ID || pool.asset_1 === USDC_ID) {
-// //       //   if (pool.asset_0 === USDC_ID) {
-// //       //     const asset_0_usd = new BN(pool.reserve_0!.toString())
-// //       //       .div(10 ** pool.decimals_0!)
-// //       //       .mul(usdc_usd!);
-// //       //     const tvl_usd = asset_0_usd.mul(2);
-// //       //     console.log(asset_0_usd);
-
-// //       //     pool.tvl_usd = Number(tvl_usd.toString());
-// //       //   } else {
-// //       //     const asset_1_usd = new BN(pool.reserve_1!.toString())
-// //       //       .div(10 ** pool.decimals_1!)
-// //       //       .mul(usdc_usd!);
-// //       //     const tvl_usd = asset_1_usd.mul(2);
-// //       //     console.log(asset_1_usd);
-
-// //       //     pool.tvl_usd = Number(tvl_usd.toString());
-// //       //   }
-// //       // }
-
-// //       // Check if new reserves are negative
-// //       // if (newReserve0 < 0n || newReserve1 < 0n) {
-// //       //   throw new Error(
-// //       //     `reserve0: ${pool.reserve_0} reserve1: ${pool.reserve_1} Insufficient reserves in pool ${poolId}`
-// //       //   );
-// //       // }
-// //       // pool.create_time = pool.create_time ?? ctx.timestamp;
-
-// //       await ctx.store.upsert(pool);
-// //     }
-// //   );
-// // // .onTimeInterval(async (block, ctx) => {
-// // //   const pools = await ctx.store.list(Pool)
-
-// // //   pools.forEach((pool, i) => {
-// // //     const poolSnapshot = new PoolSnapshot({
-// // //       id: pool.id,
-// // //       timestamp: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-// // //       block_date: new Date(ctx.timestamp).toISOString().slice(0, 19).replace('T', ' '),
-// // //       chain_id: Number(ctx.chainId),
-// // //       pool_address: poolIdToStr(pool.id),
-// // //       token_index: 0n,
-// // //       token_address: pool.lp_token_address,
-
-// // //   });
-// // //   })
-
-// // // await ctx.store.upsert(poolSnapshot);
-// // // }, 60, 60);
+        await ctx.store.upsert(newUserSnapDaily);
+      }
+    },
+    1440,
+    1440
+  );
