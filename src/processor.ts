@@ -40,6 +40,13 @@ import {
 import { BN } from "fuels";
 import { getPriceBySymbol, token } from "@sentio/sdk/utils";
 import { tokenConfig } from "./tokenConfig.js";
+import { Endpoints, GLOBAL_CONFIG } from "@sentio/runtime";
+
+GLOBAL_CONFIG.execution = {
+  sequential: true,
+};
+
+Endpoints.INSTANCE.priceFeedAPI = "https://app.sentio.xyz";
 
 const USDC_ID =
   "0x286c479da40dc953bddc3bb4c453b608bba2e0ac483b077bd475174115395e6b";
@@ -171,6 +178,28 @@ DieselAmmContractProcessor.bind({
 
     await ctx.store.upsert(pool0);
     await ctx.store.upsert(pool1);
+  })
+  .onLogTotalSupplyEvent(async (log, ctx) => {
+    const supply = await ctx.store.get(
+      Diesel_TotalSupplyEvent,
+      log.data.asset.bits
+    );
+
+    if (supply) {
+      supply.supply = BigInt(log.data.supply.toString());
+      await ctx.store.upsert(supply);
+    } else {
+      const totalSupply = new Diesel_TotalSupplyEvent({
+        id: log.data.asset.bits,
+        time: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
+        block_height: Number(ctx.transaction?.blockNumber),
+        transaction_id: ctx.transaction?.id!,
+        asset: log.data.asset.bits,
+        supply: BigInt(log.data.supply.toString()),
+        sender: log.data.sender.Address?.bits!,
+      });
+      await ctx.store.upsert(totalSupply);
+    }
   })
   .onLogMintEvent(async (log, ctx) => {
     try {
@@ -1195,28 +1224,7 @@ DieselAmmContractProcessor.bind({
 
     await ctx.store.upsert(v2Transfer);
   })
-  .onLogTotalSupplyEvent(async (log, ctx) => {
-    const supply = await ctx.store.get(
-      Diesel_TotalSupplyEvent,
-      log.data.asset.bits
-    );
 
-    if (supply) {
-      supply.supply = BigInt(log.data.supply.toString());
-      await ctx.store.upsert(supply);
-    } else {
-      const totalSupply = new Diesel_TotalSupplyEvent({
-        id: log.data.asset.bits,
-        time: Math.floor(new Date(ctx.timestamp).getTime() / 1000),
-        block_height: Number(ctx.transaction?.blockNumber),
-        transaction_id: ctx.transaction?.id!,
-        asset: log.data.asset.bits,
-        supply: BigInt(log.data.supply.toString()),
-        sender: log.data.sender.Address?.bits!,
-      });
-      await ctx.store.upsert(totalSupply);
-    }
-  })
   .onTimeInterval(
     async (block, ctx) => {
       const pools = ctx.store.listIterator(Pool, []);
