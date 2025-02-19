@@ -2,6 +2,7 @@ import { TestProcessorServer } from "@sentio/sdk/testing";
 import { before, describe, test } from "node:test";
 import { expect } from "chai";
 import { FuelNetwork } from "@sentio/sdk/fuel";
+import { Endpoints, GLOBAL_CONFIG } from "@sentio/runtime";
 // import { txdata } from "./mockData.js";
 
 const txdata = {
@@ -2650,6 +2651,12 @@ const txdata = {
     },
   ],
 };
+
+GLOBAL_CONFIG.execution = {
+  sequential: true,
+};
+
+Endpoints.INSTANCE.priceFeedAPI = "https://app.sentio.xyz";
 
 describe("Test Processor", () => {
   const service = new TestProcessorServer(() => import("./processor.js"));
